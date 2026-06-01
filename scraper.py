@@ -13,7 +13,9 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
-DB_PATH = "polls.db"
+import os as _os
+_DATA = _os.environ.get("DATA_DIR", ".")
+DB_PATH = f"{_DATA}/polls.db"
 URL = "https://themadad.com/allpolls/"
 
 HE_TO_EN = {
@@ -63,9 +65,9 @@ def init_db(conn: sqlite3.Connection):
             media_outlet TEXT,
             pollster TEXT,
             likud REAL, yahadut_tora REAL, shas REAL, kahol_lavan REAL,
-            yesh_atid REAL, hayamin_hehadash REAL, israel_beiteinu REAL,
+            yesh_atid REAL, hadash_taal REAL, israel_beiteinu REAL,
             demokratim REAL, zionut_datit REAL, raam REAL, balad REAL,
-            otzma_yehudit REAL, bennett_lapid REAL, yamina REAL,
+            otzma_yehudit REAL, beyahad REAL, yashar REAL,
             miluimnikim REAL, reshima_meshutefet REAL,
             fetched_at TEXT
         )
@@ -131,8 +133,8 @@ def upsert(df: pd.DataFrame, conn: sqlite3.Connection) -> int:
                 INSERT OR IGNORE INTO polls
                 (poll_number, date, respondents, media_outlet, pollster,
                  likud, yahadut_tora, shas, kahol_lavan, yesh_atid,
-                 hayamin_hehadash, israel_beiteinu, demokratim, zionut_datit,
-                 raam, balad, otzma_yehudit, bennett_lapid, yamina,
+                 hadash_taal, israel_beiteinu, demokratim, zionut_datit,
+                 raam, balad, otzma_yehudit, beyahad, yashar,
                  miluimnikim, reshima_meshutefet, fetched_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
@@ -147,15 +149,15 @@ def upsert(df: pd.DataFrame, conn: sqlite3.Connection) -> int:
                     row.get("shas"),
                     row.get("kahol_lavan"),
                     row.get("yesh_atid"),
-                    row.get("hayamin_hehadash"),
+                    row.get("hadash_taal"),
                     row.get("israel_beiteinu"),
                     row.get("demokratim"),
                     row.get("zionut_datit"),
                     row.get("raam"),
                     row.get("balad"),
                     row.get("otzma_yehudit"),
-                    row.get("bennett_lapid"),
-                    row.get("yamina"),
+                    row.get("beyahad"),
+                    row.get("yashar"),
                     row.get("miluimnikim"),
                     row.get("reshima_meshutefet"),
                     row.get("fetched_at"),

@@ -1,62 +1,122 @@
 """
 Dash dashboard for Israeli election polls.
-Runs scraper in background every 30 minutes.
+Public:  /
+Admin:   /admin  (password protected — event management)
 """
 
+import json
+import os
 import sqlite3
+
 import pandas as pd
 import plotly.graph_objects as go
-import dash
-from dash import Dash, dcc, html, Input, Output, State, callback_context, no_update, ALL
+from dash import (
+    ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update,
+)
 import dash_bootstrap_components as dbc
 from apscheduler.schedulers.background import BackgroundScheduler
-from scraper import run_scrape, DB_PATH, init_db, PARTY_COLUMNS
 
-# ── Hebrew party labels ───────────────────────────────────────────────────────
+from scraper import DB_PATH, init_db, run_scrape
+
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "rozamedia2026")
+_DATA = os.environ.get("DATA_DIR", ".")
+EVENTS_DB_PATH = f"{_DATA}/events.db"   # separate from polls.db — never deleted on schema reset
+
+BLOCS = [
+    # סדר מימין לשמאל בכנסת — בגרף: ימין קיצוני בקצה הימני
+    {"name": "ערבים",            "parties": ["hadash_taal", "balad", "raam", "reshima_meshutefet"],                   "color": "#065F46"},
+    {"name": "מרכז-שמאל",        "parties": ["demokratim"],                                                            "color": "#D93025"},
+    {"name": "חרדים",            "parties": ["yahadut_tora", "shas"],                                                  "color": "#1B4332"},
+    {"name": "ימין סוציאלי",     "parties": ["likud"],                                                                 "color": "#3D1040"},
+    {"name": "ימין ניאו-ליברלי", "parties": ["beyahad", "israel_beiteinu", "kahol_lavan", "yashar", "miluimnikim"],   "color": "#1E3A8A"},
+    {"name": "ימין קיצוני",      "parties": ["zionut_datit", "otzma_yehudit"],                                        "color": "#7F1D1D"},
+]
+
+DEFAULT_PARTIES = [
+    "likud", "yesh_atid", "zionut_datit", "shas",
+    "yahadut_tora", "israel_beiteinu", "demokratim", "beyahad",
+]
+
 PARTY_HE = {
-    "likud": "הליכוד",
-    "yahadut_tora": "יהדות התורה",
-    "shas": 'ש"ס',
-    "kahol_lavan": "כחול לבן",
-    "yesh_atid": "יש עתיד",
-    "hadash_taal": 'חדש תע"ל',
-    "israel_beiteinu": "ישראל ביתנו",
-    "demokratim": "הדמוקרטים",
-    "zionut_datit": "הציונות הדתית",
-    "raam": 'רע"מ',
-    "balad": 'בל"ד',
-    "otzma_yehudit": "עוצמה יהודית",
-    "beyahad": "ביחד (בנט ולפיד)",
-    "yashar": "ישר!",
-    "miluimnikim": "המילואימניקים",
-    "reshima_meshutefet": "רשימה ערבית מאוחדת",
+    "likud":              "הליכוד",
+    "yahadut_tora":       "יהדות התורה",
+    "shas":               'ש"ס',
+    "kahol_lavan":        "כחול לבן",
+    "yesh_atid":          "יש עתיד",
+    "hadash_taal":        'חדש תע"ל',
+    "israel_beiteinu":    "ישראל ביתנו",
+    "demokratim":         "הדמוקרטים",
+    "zionut_datit":       "הציונות הדתית",
+    "raam":               'רע"מ',
+    "balad":              'בל"ד',
+    "otzma_yehudit":      "עוצמה יהודית",
+    "beyahad":            "ביחד",
+    "yashar":             "ישר!",
+    "miluimnikim":        "מילואימניקים",
+    "reshima_meshutefet": "רשימה ערבית",
 }
 
 PARTY_COLORS = {
-    "likud": "#1e3a8a",
-    "yahadut_tora": "#1d4ed8",
-    "shas": "#2563eb",
-    "kahol_lavan": "#60a5fa",
-    "yesh_atid": "#f97316",
-    "hadash_taal": "#0d9488",
-    "israel_beiteinu": "#0ea5e9",
-    "demokratim": "#ec4899",
-    "zionut_datit": "#dc2626",
-    "raam": "#16a34a",
-    "balad": "#15803d",
-    "otzma_yehudit": "#b91c1c",
-    "beyahad": "#9333ea",
-    "yashar": "#c2410c",
-    "miluimnikim": "#64748b",
-    "reshima_meshutefet": "#166534",
+    "likud":              "#3D1040",
+    "yahadut_tora":       "#7B3F8C",
+    "shas":               "#8B4513",
+    "kahol_lavan":        "#4682B4",
+    "yesh_atid":          "#D93025",
+    "hadash_taal":        "#2E8B57",
+    "israel_beiteinu":    "#1565C0",
+    "demokratim":         "#C2185B",
+    "zionut_datit":       "#8B0000",
+    "raam":               "#2E7D32",
+    "balad":              "#1B5E20",
+    "otzma_yehudit":      "#B71C1C",
+    "beyahad":            "#E65100",
+    "yashar":             "#6A1B9A",
+    "miluimnikim":        "#607D8B",
+    "reshima_meshutefet": "#004D40",
 }
 
+# ── Mock feed (replace with real Telegram Bot API when token is available) ────
+# Each item: time, date, type ("poll"/"news"/"alert"), source, title, content, views
+MOCK_FEED = [
+    {"time": "16:45", "date": "31/05", "type": "poll",
+     "source": "מעריב",
+     "title": "סקר חדש 📊",
+     "content": "ליכוד 23 · ביחד 22 · הדמוקרטים 10 · ציונות דתית 9 · יהדות התורה 7",
+     "views": "1.4K"},
+    {"time": "14:12", "date": "31/05", "type": "news",
+     "source": "ערוץ 13",
+     "title": "נפתחו שיחות בין ביחד לדמוקרטים",
+     "content": "לפי הדיווח, ראשי שתי הרשימות נפגשו הלילה לבחינת פלטפורמה משותפת",
+     "views": "3.2K"},
+    {"time": "11:30", "date": "31/05", "type": "poll",
+     "source": "ישראל היום",
+     "title": "סקר חדש 📊",
+     "content": "ליכוד 25 · ביחד 22 · ציונות דתית 8 · יהדות התורה 7",
+     "views": "987"},
+    {"time": "09:00", "date": "31/05", "type": "alert",
+     "source": "רוזה ניוז",
+     "title": "⚡ ניתוח שבועי",
+     "content": "הדמוקרטים ממשיכים לעלות — 10 מנדטים בממוצע שלושת השבועות האחרונים",
+     "views": "2.1K"},
+    {"time": "22:15", "date": "30/05", "type": "poll",
+     "source": "מכון הארץ",
+     "title": "סקר חדש 📊",
+     "content": "ביחד 24 · ליכוד 23 · הדמוקרטים 9 · ש\"ס 8",
+     "views": "1.8K"},
+    {"time": "18:40", "date": "30/05", "type": "news",
+     "source": "וואלה",
+     "title": "שר הביטחון: 'לוח הזמנים לבחירות ברור'",
+     "content": "בראיון לוואלה חדשות הסביר: 'אנחנו עומדים בתאריך שנקבע'",
+     "views": "4.5K"},
+]
+
+
 EVENT_COLORS = {
-    "ביטחוני": "#dc2626",
-    "כלכלי": "#16a34a",
-    "פוליטי": "#2563eb",
-    "חברתי": "#f97316",
-    "אחר": "#64748b",
+    "ביטחוני": "#8B0000",
+    "כלכלי":   "#2E7D32",
+    "פוליטי":  "#3D1040",
+    "חברתי":   "#D93025",
+    "אחר":     "#607D8B",
 }
 
 
@@ -67,34 +127,51 @@ def get_conn():
     return conn
 
 
-def load_polls(outlets=None) -> pd.DataFrame:
+def load_polls(outlets=None):
     conn = get_conn()
-    q = "SELECT * FROM polls WHERE date IS NOT NULL ORDER BY date"
-    df = pd.read_sql_query(q, conn)
+    df = pd.read_sql_query(
+        "SELECT * FROM polls WHERE date IS NOT NULL ORDER BY date", conn
+    )
     conn.close()
     if outlets:
         df = df[df["media_outlet"].isin(outlets)]
     return df
 
 
-def load_events() -> pd.DataFrame:
-    conn = get_conn()
+def get_events_conn():
+    conn = sqlite3.connect(EVENTS_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def load_events():
+    conn = get_events_conn()
     df = pd.read_sql_query("SELECT * FROM events ORDER BY date", conn)
     conn.close()
     return df
 
 
-def get_outlets() -> list:
+def get_outlets():
     conn = get_conn()
     rows = conn.execute(
-        "SELECT DISTINCT media_outlet FROM polls WHERE media_outlet != '' ORDER BY media_outlet"
+        "SELECT DISTINCT media_outlet FROM polls "
+        "WHERE media_outlet != '' ORDER BY media_outlet"
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
 
 
-def add_event(date, title, description, category):
-    conn = get_conn()
+def add_event_db(date, title, description, category):
+    conn = get_events_conn()
     conn.execute(
         "INSERT INTO events (date, title, description, category) VALUES (?,?,?,?)",
         (date, title, description, category),
@@ -103,8 +180,8 @@ def add_event(date, title, description, category):
     conn.close()
 
 
-def delete_event(event_id):
-    conn = get_conn()
+def delete_event_db(event_id):
+    conn = get_events_conn()
     conn.execute("DELETE FROM events WHERE id=?", (event_id,))
     conn.commit()
     conn.close()
@@ -114,224 +191,852 @@ def delete_event(event_id):
 scheduler = BackgroundScheduler()
 scheduler.add_job(run_scrape, "interval", minutes=30, id="scrape")
 scheduler.start()
-run_scrape()  # fetch immediately on startup
+run_scrape()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
-    title="סקרי בחירות — עמוד הבחירות",
+    title="רוזה ניוז | בחירות 2026",
     suppress_callback_exceptions=True,
 )
+
 app.index_string = """<!DOCTYPE html>
 <html dir="rtl" lang="he">
 <head>
 {%metas%}
 <title>{%title%}</title>
-{%favicon%}
+<link rel="icon" type="image/png" href="/assets/rose.png">
 {%css%}
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap" rel="stylesheet">
 <style>
   :root {
-    --red: #d32f2f;
-    --black: #111111;
-    --gray: #f4f4f4;
-    --border: #e0e0e0;
+    --purple:   #3D1040;
+    --coral:    #D93025;
+    --lime:     #CCDD00;
+    --white:    #FFFFFF;
+    --bg:       #F7F5F2;
+    --border:   #E0D8E8;
+    --muted:    #6B6B6B;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: "Noto Sans Hebrew", "Arial Hebrew", Arial, sans-serif;
-    background: #fff;
-    color: var(--black);
+    font-family: "Heebo", Arial, sans-serif;
+    background: var(--bg);
+    color: #1A1A1A;
     direction: rtl;
-    margin: 0;
   }
+
+  /* ── Header ── */
   .site-header {
-    border-bottom: 3px solid var(--black);
-    padding: 18px 32px 12px;
+    background: #E8D5F5;
+    padding: 0 28px;
+    height: 58px;           /* FIXED — never grows */
     display: flex;
-    align-items: baseline;
-    gap: 16px;
+    align-items: center;
+    gap: 18px;
+    border-bottom: 3px solid var(--lime);
+    overflow: visible;      /* allow logo to bleed out */
+    position: relative;
+    z-index: 10;
   }
-  .site-header h1 {
-    font-size: 2rem;
+  .header-rose { height: 38px; width: auto; flex-shrink: 0; }
+  .header-logo-white {
+    /* Layout size stays small — transform makes it visually large */
+    height: 28px;
+    width: auto;
+    filter: invert(1) brightness(0.15);
+    flex-shrink: 0;
+    /* Scale up visually without affecting layout / header height */
+    transform: scale(3.2);
+    transform-origin: right center;
+    /* Push other elements away so scaled logo doesn't overlap */
+    margin-left: 120px;
+  }
+  .header-status {
+    margin-right: auto;
+    color: rgba(61,16,64,0.4);
+    font-size: 0.68rem;
+    direction: ltr;
+    white-space: nowrap;
+  }
+
+  /* ── Main ── */
+  .main { padding: 18px 28px; }
+  .feed-panel { min-height: 560px; max-height: 560px; }
+
+  /* ── Chart wrapper ── */
+  .chart-wrapper {
+    position: relative;
+    background: var(--white);
+    border: none;
+    border-radius: 6px 6px 0 0;
+    overflow: visible;
+  }
+  /* Chart overlays — inside chart box */
+  .ct-overlay-left {
+    position: absolute;
+    top: 10px;
+    left: 14px;
+    z-index: 20;
+    display: flex;
+    gap: 2px;
+    background: rgba(247,245,242,0.95);
+    border-radius: 4px;
+    padding: 2px 4px;
+    border: 1px solid var(--border);
+  }
+  .ct-overlay-right {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    z-index: 20;
+    display: flex;
+    gap: 2px;
+    background: rgba(247,245,242,0.95);
+    border-radius: 4px;
+    padding: 2px 4px;
+    border: 1px solid var(--border);
+  }
+  .ct-group { display: flex; gap: 2px; }
+  .ct-btn {
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.12s;
+    white-space: nowrap;
+  }
+  .ct-btn.active {
+    background: var(--purple);
+    color: var(--lime);
+  }
+
+  /* ── Outlet pills (right column) ── */
+  .outlet-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 2px;
+  }
+  .o-pill {
+    display: block;
+    width: 100%;
+    padding: 4px 5px;
+    font-family: inherit;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-align: center;
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    background: var(--white);
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.13s;
+    white-space: normal;
+    line-height: 1.2;
+  }
+  .o-pill.active {
+    background: var(--purple);
+    color: var(--lime);
+    border-color: var(--purple);
+  }
+  .o-pill-all {
+    border-color: var(--lime);
+    color: var(--purple);
     font-weight: 900;
-    letter-spacing: -0.5px;
-    margin: 0;
   }
-  .site-header .sub {
-    font-size: 0.9rem;
-    color: #555;
-    border-right: 2px solid var(--red);
-    padding-right: 10px;
+  .o-pill-all.active {
+    background: var(--lime);
+    color: var(--purple);
+    border-color: var(--lime);
   }
-  .main { padding: 24px 32px; }
-  .card {
+
+  /* ── Party pills (below chart) ── */
+  .party-pills-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 10px 12px;
+    background: var(--white);
+    border: none;
+    border-radius: 0 0 6px 6px;
+  }
+  .p-pill {
+    padding: 3px 11px;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 14px;
+    border: 1.5px solid currentColor;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.12s;
+    opacity: 0.38;
+  }
+  .p-pill.active { opacity: 1; }
+
+  .status-row {
+    text-align: left;
+    padding: 5px 0 0;
+    color: var(--muted);
+    font-size: 0.68rem;
+  }
+
+  /* ── Events box ── */
+  .events-box {
+    background: var(--white);
+    border: none;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 6px;
+  }
+  .events-box-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--purple);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .events-pills-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .ev-pill {
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 0.73rem;
+    font-weight: 600;
+    border-radius: 12px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.13s;
+    white-space: nowrap;
+  }
+  .ev-pill.active {
+    border-color: var(--purple);
+    background: var(--purple);
+    color: var(--lime);
+  }
+
+  /* ── Admin ── */
+  .admin-wrap {
+    max-width: 540px;
+    margin: 36px auto;
+    padding: 28px 32px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .admin-title {
+    font-size: 1.1rem;
+    font-weight: 900;
+    color: var(--purple);
+    border-bottom: 2px solid var(--lime);
+    padding-bottom: 8px;
+    margin-bottom: 18px;
+  }
+  label {
+    font-size: 0.77rem;
+    font-weight: 700;
+    color: var(--purple);
+    display: block;
+    margin: 10px 0 4px;
+  }
+  input[type=text], input[type=password], textarea {
+    width: 100%;
+    padding: 7px 10px;
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 20px;
-    margin-bottom: 24px;
-    background: #fff;
-  }
-  .card h3 {
-    font-size: 1rem;
-    font-weight: 700;
-    border-bottom: 2px solid var(--black);
-    padding-bottom: 8px;
-    margin-bottom: 16px;
-  }
-  .red-label { color: var(--red); font-weight: 700; }
-  label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 4px; }
-  .Select-control, .dash-input input, input[type=text], input[type=date], textarea, select {
-    border: 1px solid var(--border) !important;
-    border-radius: 3px !important;
-    font-family: inherit !important;
+    font-family: inherit;
+    font-size: 0.85rem;
     direction: rtl;
+    background: var(--bg);
+    outline: none;
+    transition: border 0.15s;
   }
-  .btn-red {
-    background: var(--red);
+  input:focus, textarea:focus { border-color: var(--purple); background: #fff; }
+  textarea { height: 56px; resize: none; }
+  .btn-primary {
+    margin-top: 12px;
+    width: 100%;
+    padding: 9px;
+    background: var(--coral);
     color: #fff;
     border: none;
-    padding: 8px 20px;
+    border-radius: 4px;
     font-family: inherit;
+    font-size: 0.88rem;
     font-weight: 700;
     cursor: pointer;
-    border-radius: 3px;
+    transition: background 0.13s;
   }
-  .btn-red:hover { background: #b71c1c; }
-  .events-list { margin-top: 12px; }
-  .event-item {
+  .btn-primary:hover { background: #8B0000; }
+  .event-admin-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.85rem;
+    padding: 8px 10px;
+    margin-top: 5px;
+    background: var(--bg);
+    border-radius: 4px;
+    border-right: 3px solid var(--coral);
+    font-size: 0.8rem;
   }
-  .event-date { color: #777; margin-left: 12px; }
-  .delete-btn {
-    background: none;
+  .del-btn {
+    background: none; border: none;
+    color: #ccc; cursor: pointer; font-size: 1.1rem;
+  }
+  .del-btn:hover { color: var(--coral); }
+
+  /* ── Telegram feed panel ── */
+  .feed-panel {
+    background: var(--white);
+    border-radius: 6px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .feed-header {
+    background: var(--purple);
+    color: var(--lime);
+    padding: 10px 14px;
+    font-size: 0.78rem;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .feed-dot {
+    width: 7px; height: 7px;
+    background: var(--coral);
+    border-radius: 50%;
+    animation: blink 1.8s ease-in-out infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.2; }
+  }
+  .feed-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .feed-body::-webkit-scrollbar { width: 3px; }
+  .feed-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .feed-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid #F5F0FB;
+    cursor: default;
+    transition: background 0.12s;
+  }
+  .feed-item:hover { background: #FAF6FF; }
+  .feed-item-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .feed-source {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--purple);
+    background: #E8D5F5;
+    padding: 1px 7px;
+    border-radius: 8px;
+  }
+  .feed-time {
+    font-size: 0.62rem;
+    color: var(--muted);
+    direction: ltr;
+  }
+  .feed-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #1A1A1A;
+    margin-bottom: 3px;
+    line-height: 1.3;
+  }
+  .feed-content {
+    font-size: 0.73rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .feed-views {
+    font-size: 0.62rem;
+    color: #BBBBBB;
+    margin-top: 4px;
+  }
+  .feed-type-poll .feed-title { color: var(--purple); }
+  .feed-type-alert .feed-title { color: var(--coral); }
+
+  /* ── Date range strip ── */
+  .date-range-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 14px 0;
+    background: var(--white);
     border: none;
-    color: #999;
-    cursor: pointer;
-    font-size: 1rem;
   }
-  .delete-btn:hover { color: var(--red); }
-  .status-bar {
-    font-size: 0.75rem;
-    color: #999;
-    text-align: left;
-    margin-top: -16px;
-    margin-bottom: 8px;
+  .dr-label { font-size: 0.7rem; color: var(--muted); font-weight: 700; margin-left: 6px; }
+  .dr-btn {
+    padding: 2px 10px;
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .dr-btn.active { background: var(--purple); color: var(--lime); border-color: var(--purple); }
+
+  /* ── Blocs bar ── */
+  .blocs-section {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-top: 10px;
+  }
+  .blocs-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--purple);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .blocs-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+    font-size: 0.72rem;
+  }
+  .bloc-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .bloc-dot {
+    width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
   }
 </style>
 </head>
 <body>{%app_entry%}<footer>{%config%}{%scripts%}{%renderer%}</footer></body>
 </html>"""
 
-app.layout = html.Div([
-    # ── Header ────────────────────────────────────────────────────────────────
-    html.Header([
-        html.H1("מד הבחירות"),
-        html.Span("ניתוח סקרים בזמן אמת", className="sub"),
-    ], className="site-header"),
 
-    html.Div([
-        dcc.Interval(id="interval", interval=60_000, n_intervals=0),  # refresh every 60s
-        html.Div(id="status-bar", className="status-bar"),
+# ── Layouts ───────────────────────────────────────────────────────────────────
+def public_layout():
+    return html.Div([
+        dcc.Interval(id="interval", interval=300_000, n_intervals=0),  # 5 min — don't reset view constantly
+        dcc.Store(id="chart-type", data="trend"),
+        dcc.Store(id="selected-parties", data=DEFAULT_PARTIES),
+        dcc.Store(id="selected-outlets", data=[]),
+        dcc.Store(id="selected-events", data=[]),
+        dcc.Store(id="date-range", data="all"),
+        dcc.Store(id="view-mode", data="parties"),
+        dcc.Store(id="selected-blocs", data=[b["name"] for b in BLOCS]),
 
-        dbc.Row([
-            # ── Left column: controls ─────────────────────────────────────────
-            dbc.Col([
-                html.Div([
-                    html.H3("סינון"),
-                    html.Label("כלי תקשורת"),
-                    dcc.Dropdown(
-                        id="outlet-filter",
-                        multi=True,
-                        placeholder="כל כלי התקשורת",
-                        style={"direction": "rtl"},
-                    ),
-                    html.Br(),
-                    html.Label("סוג גרף"),
-                    dcc.RadioItems(
-                        id="chart-type",
-                        options=[
-                            {"label": " מגמות לאורך זמן", "value": "trend"},
-                            {"label": " ממוצע (עמודות)", "value": "bar"},
-                        ],
-                        value="trend",
-                        labelStyle={"display": "block", "marginBottom": "6px"},
-                    ),
-                    html.Br(),
-                    html.Label("מפלגות להצגה"),
-                    dcc.Checklist(
-                        id="party-filter",
-                        options=[{"label": f" {v}", "value": k} for k, v in PARTY_HE.items()],
-                        value=["likud", "yesh_atid", "zionut_datit", "shas", "yahadut_tora",
-                               "israel_beiteinu", "demokratim", "beyahad"],
-                        labelStyle={"display": "block", "marginBottom": "4px", "fontSize": "0.82rem"},
-                    ),
-                ], className="card"),
+        html.Header([
+            html.Img(src="/assets/rose.png", className="header-rose"),
+            html.Img(src="/assets/logo-white.png", className="header-logo-white",
+                     style={"display": "block"}),
+            html.Div(id="header-status", className="header-status"),
+        ], className="site-header"),
 
-                # ── Events panel ──────────────────────────────────────────────
-                html.Div([
-                    html.H3("אירועים תקשורתיים"),
+        html.Div([
+            dbc.Row([
+                # FAR RIGHT: Telegram feed
+                dbc.Col(
+                    html.Div([
+                        html.Div([
+                            html.Div(className="feed-dot"),
+                            html.Span("רוזה ניוז • עדכונים"),
+                        ], className="feed-header"),
+                        html.Div([
+                            *[
+                                html.Div([
+                                    html.Div([
+                                        html.Span(item["source"], className="feed-source"),
+                                        html.Span(f'{item["date"]} {item["time"]}',
+                                                  className="feed-time"),
+                                    ], className="feed-item-meta"),
+                                    html.Div(item["title"], className="feed-title"),
+                                    html.Div(item["content"], className="feed-content")
+                                    if item["content"] else None,
+                                    html.Div(f'👁 {item["views"]}', className="feed-views"),
+                                ], className=f'feed-item feed-type-{item["type"]}')
+                                for item in MOCK_FEED
+                            ],
+                        ], className="feed-body"),
+                    ], className="feed-panel"),
+                    width=3,
+                ),
+
+                # MIDDLE: chart + party pills
+                dbc.Col([
+                    html.Div([
+                        # מגמות/ממוצע — top LEFT
+                        html.Div([
+                            html.Button("מגמות", id="btn-trend",
+                                        className="ct-btn active", n_clicks=0),
+                            html.Button("ממוצע", id="btn-bar",
+                                        className="ct-btn", n_clicks=0),
+                        ], className="ct-overlay-left"),
+                        # מפלגות/גושים — top RIGHT
+                        html.Div([
+                            html.Button("מפלגות", id="btn-parties",
+                                        className="ct-btn active", n_clicks=0),
+                            html.Button("גושים", id="btn-blocs",
+                                        className="ct-btn", n_clicks=0),
+                        ], className="ct-overlay-right"),
+                        dcc.Graph(id="main-chart",
+                                  config={"displayModeBar": False},
+                                  style={"height": "490px"}),
+                    ], className="chart-wrapper"),
+
+                    # Date range strip
+                    html.Div([
+                        html.Span("תקופה:", className="dr-label"),
+                        html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
+                        html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
+                        html.Button("3 חודשים", id="dr-3month", className="dr-btn",        n_clicks=0),
+                        html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
+                        html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
+                        html.Button("הכל",      id="dr-all",    className="dr-btn active", n_clicks=0),
+                    ], className="date-range-strip"),
+
+                    html.Div(id="party-pills-container", className="party-pills-row"),
+                    html.Div(id="status-row", className="status-row"),
+                    html.Div(id="events-box-container"),
+                ], width=7),
+
+                # FAR LEFT: outlet pills
+                dbc.Col(
+                    html.Div(id="outlet-pills-container", className="outlet-col"),
+                    width=2,
+                ),
+            ]),
+        ], className="main"),
+    ])
+
+
+def admin_layout():
+    return html.Div([
+        dcc.Store(id="admin-auth", data=False, storage_type="session"),
+
+        html.Header([
+            html.Img(src="/assets/rose.png", className="header-rose"),
+            html.Span("ניהול אירועים", className="header-title"),
+        ], className="site-header"),
+
+        html.Div(
+            html.Div([
+                html.Div("בק אופיס — אירועים תקשורתיים", className="admin-title"),
+
+                # Password gate
+                html.Div(id="admin-gate", children=[
+                    html.Label("סיסמה"),
+                    dcc.Input(id="admin-password", type="password",
+                              placeholder="הכנס סיסמה"),
+                    html.Button("כניסה", id="admin-login-btn",
+                                className="btn-primary", n_clicks=0),
+                    html.Div(id="admin-login-error",
+                             style={"color": "#D93025", "fontSize": "0.8rem",
+                                    "marginTop": "8px"}),
+                ]),
+
+                # Event management panel (hidden until auth)
+                html.Div(id="admin-panel", style={"display": "none"}, children=[
                     html.Label("תאריך"),
-                    dcc.DatePickerSingle(id="event-date", display_format="DD/MM/YYYY",
-                                        style={"marginBottom": "8px"}),
+                    dcc.DatePickerSingle(id="admin-event-date",
+                                         display_format="DD/MM/YYYY"),
                     html.Label("כותרת"),
-                    dcc.Input(id="event-title", type="text", placeholder="למשל: חתימת הסכם לבנון",
-                              style={"width": "100%", "marginBottom": "8px", "padding": "6px"}),
+                    dcc.Input(id="admin-event-title", type="text",
+                              placeholder="למשל: חתימת הסכם לבנון"),
                     html.Label("קטגוריה"),
                     dcc.Dropdown(
-                        id="event-category",
+                        id="admin-event-category",
                         options=[{"label": k, "value": k} for k in EVENT_COLORS],
                         value="פוליטי",
                         clearable=False,
-                        style={"marginBottom": "8px"},
+                        style={"fontSize": "0.85rem"},
                     ),
                     html.Label("תיאור (אופציונלי)"),
-                    dcc.Textarea(id="event-desc", style={"width": "100%", "height": "60px",
-                                                          "marginBottom": "8px", "padding": "6px"}),
-                    html.Button("הוסף אירוע", id="add-event-btn", className="btn-red"),
-                    html.Div(id="events-list", className="events-list"),
-                ], className="card"),
-            ], width=3),
+                    dcc.Textarea(id="admin-event-desc", placeholder="אופציונלי"),
+                    html.Button("הוסף אירוע", id="admin-add-btn",
+                                className="btn-primary", n_clicks=0),
+                    html.Div(id="admin-events-list", style={"marginTop": "14px"}),
+                ]),
+            ], className="admin-wrap"),
+            style={"padding": "0 28px"},
+        ),
+    ])
 
-            # ── Right column: charts ──────────────────────────────────────────
-            dbc.Col([
-                html.Div([
-                    dcc.Graph(id="main-chart", config={"displayModeBar": False},
-                              style={"height": "520px"}),
-                ], className="card"),
-            ], width=9),
-        ]),
-    ], className="main"),
+
+app.layout = html.Div([
+    dcc.Location(id="url"),
+    html.Div(id="page-content"),
 ])
 
 
-# ── Callbacks ─────────────────────────────────────────────────────────────────
+# ── Routing ───────────────────────────────────────────────────────────────────
+@app.callback(Output("page-content", "children"), Input("url", "pathname"))
+def render_page(pathname):
+    if pathname == "/admin":
+        return admin_layout()
+    return public_layout()
+
+
+# ── Chart type toggle ──────────────────────────────────────────────────────────
 @app.callback(
-    Output("outlet-filter", "options"),
-    Input("interval", "n_intervals"),
+    Output("chart-type", "data"),
+    Output("btn-trend", "className"),
+    Output("btn-bar", "className"),
+    Input("btn-trend", "n_clicks"),
+    Input("btn-bar", "n_clicks"),
+    prevent_initial_call=True,
 )
-def update_outlet_options(_):
-    return [{"label": o, "value": o} for o in get_outlets()]
+def toggle_chart_type(_, __):
+    ctx = callback_context
+    btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "btn-trend"
+    if btn == "btn-trend":
+        return "trend", "ct-btn active", "ct-btn"
+    return "bar", "ct-btn", "ct-btn active"
 
 
+# ── View mode toggle (parties / blocs) ────────────────────────────────────────
+@app.callback(
+    Output("view-mode", "data"),
+    Output("btn-parties", "className"),
+    Output("btn-blocs", "className"),
+    Input("btn-parties", "n_clicks"),
+    Input("btn-blocs", "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_view_mode(_, __):
+    ctx = callback_context
+    btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "btn-parties"
+    if btn == "btn-parties":
+        return "parties", "ct-btn active", "ct-btn"
+    return "blocs", "ct-btn", "ct-btn active"
+
+
+@app.callback(
+    Output("selected-blocs", "data"),
+    Input({"type": "bloc-pill", "bloc": ALL}, "n_clicks"),
+    State("selected-blocs", "data"),
+    prevent_initial_call=True,
+)
+def toggle_bloc(_, selected):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    bloc_name = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["bloc"]
+    selected = list(selected or [])
+    if bloc_name in selected:
+        selected.remove(bloc_name)
+    else:
+        selected.append(bloc_name)
+    return selected
+
+
+# ── Outlet pills ───────────────────────────────────────────────────────────────
+@app.callback(
+    Output("outlet-pills-container", "children"),
+    Input("interval", "n_intervals"),
+    Input("selected-outlets", "data"),
+)
+def render_outlet_pills(_, selected):
+    selected = selected or []
+    outlets = get_outlets()
+    all_active = len(selected) == 0
+
+    pills = [html.Button(
+        "הכל",
+        id={"type": "outlet-pill", "outlet": "__all__"},
+        className=f"o-pill o-pill-all {'active' if all_active else ''}",
+        n_clicks=0,
+    )]
+    for o in outlets:
+        pills.append(html.Button(
+            o,
+            id={"type": "outlet-pill", "outlet": o},
+            className=f"o-pill {'active' if o in selected else ''}",
+            n_clicks=0,
+        ))
+    return pills
+
+
+@app.callback(
+    Output("selected-outlets", "data"),
+    Input({"type": "outlet-pill", "outlet": ALL}, "n_clicks"),
+    State("selected-outlets", "data"),
+    prevent_initial_call=True,
+)
+def toggle_outlet(_, selected):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    outlet = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["outlet"]
+    selected = list(selected or [])
+    if outlet == "__all__":
+        return []
+    if outlet in selected:
+        selected.remove(outlet)
+    else:
+        selected.append(outlet)
+    return selected
+
+
+# ── Party / Bloc pills ────────────────────────────────────────────────────────
+@app.callback(
+    Output("party-pills-container", "children"),
+    Input("selected-parties", "data"),
+    Input("view-mode", "data"),
+    Input("selected-blocs", "data"),
+)
+def render_bottom_pills(sel_parties, view_mode, sel_blocs):
+    if view_mode == "blocs":
+        sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
+        pills = []
+        for bloc in BLOCS:
+            active = bloc["name"] in sel_blocs
+            color = bloc["color"]
+            party_names = ", ".join(PARTY_HE.get(p, p) for p in bloc["parties"] if p in PARTY_HE)
+            pills.append(html.Button(
+                [html.Span(bloc["name"]),
+                 html.Span(party_names,
+                           style={"display": "block", "fontSize": "0.6rem",
+                                  "fontWeight": "400", "opacity": "0.85",
+                                  "lineHeight": "1.2", "marginTop": "2px"})],
+                id={"type": "bloc-pill", "bloc": bloc["name"]},
+                className=f"p-pill {'active' if active else ''}",
+                n_clicks=0,
+                style={
+                    "color": "white" if active else color,
+                    "backgroundColor": color if active else "transparent",
+                    "borderColor": color,
+                    "textAlign": "right",
+                    "paddingBlock": "5px",
+                },
+            ))
+        return pills
+
+    # Party mode (default)
+    sel_parties = sel_parties or []
+    pills = []
+    for key, name in PARTY_HE.items():
+        color = PARTY_COLORS.get(key, "#888")
+        active = key in sel_parties
+        pills.append(html.Button(
+            name,
+            id={"type": "party-pill", "party": key},
+            className=f"p-pill {'active' if active else ''}",
+            n_clicks=0,
+            style={
+                "color": "white" if active else color,
+                "backgroundColor": color if active else "transparent",
+                "borderColor": color,
+            },
+        ))
+    return pills
+
+
+@app.callback(
+    Output("selected-parties", "data"),
+    Input({"type": "party-pill", "party": ALL}, "n_clicks"),
+    State("selected-parties", "data"),
+    prevent_initial_call=True,
+)
+def toggle_party(_, selected):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    party = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["party"]
+    selected = list(selected or [])
+    if party in selected:
+        selected.remove(party)
+    else:
+        selected.append(party)
+    return selected
+
+
+# ── Date range ────────────────────────────────────────────────────────────────
+DR_BTNS = ["dr-2weeks", "dr-month", "dr-3month", "dr-6month", "dr-year", "dr-all"]
+DR_VALS = {"dr-2weeks": "2weeks", "dr-month": "month", "dr-3month": "3month",
+           "dr-6month": "6month", "dr-year": "year", "dr-all": "all"}
+DR_DAYS = {"2weeks": 14, "month": 30, "3month": 90, "6month": 182, "year": 365, "all": 99999}
+DR_LABELS = {"2weeks": "שבועיים", "month": "חודש אחרון", "3month": "3 חודשים",
+             "6month": "חצי שנה", "year": "שנה", "all": "כל הסקרים"}
+
+
+@app.callback(
+    Output("date-range",  "data"),
+    Output("dr-2weeks",   "className"),
+    Output("dr-month",    "className"),
+    Output("dr-3month",   "className"),
+    Output("dr-6month",   "className"),
+    Output("dr-year",     "className"),
+    Output("dr-all",      "className"),
+    [Input(b, "n_clicks") for b in DR_BTNS],
+    prevent_initial_call=True,
+)
+def set_date_range(*_):
+    ctx = callback_context
+    btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "dr-all"
+    val = DR_VALS.get(btn, "all")
+    classes = ["dr-btn active" if b == btn else "dr-btn" for b in DR_BTNS]
+    return (val, *classes)
+
+
+def apply_date_range(df, date_range):
+    if date_range == "all" or df.empty:
+        return df
+    import datetime
+    days = DR_DAYS.get(date_range, 99999)
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    return df[df["date"] >= cutoff]
+
+
+# ── Main chart ────────────────────────────────────────────────────────────────
 @app.callback(
     Output("main-chart", "figure"),
-    Output("status-bar", "children"),
+    Output("header-status", "children"),
     Input("interval", "n_intervals"),
-    Input("outlet-filter", "value"),
-    Input("chart-type", "value"),
-    Input("party-filter", "value"),
-    Input("events-list", "children"),  # refresh when events change
+    Input("selected-outlets", "data"),
+    Input("chart-type", "data"),
+    Input("selected-parties", "data"),
+    Input("selected-events", "data"),
+    Input("date-range", "data"),
+    Input("view-mode", "data"),
+    Input("selected-blocs", "data"),
 )
-def update_chart(_, outlets, chart_type, parties, _events):
+def update_chart(_, outlets, chart_type, parties, selected_event_ids,
+                 date_range, view_mode, sel_blocs):
     df = load_polls(outlets or None)
-    events_df = load_events()
+    all_events = load_events()
+    sel_ids = set(selected_event_ids or [])
+    all_sel_events = all_events[all_events["id"].isin(sel_ids)] if not all_events.empty else all_events
 
     if df.empty:
         fig = go.Figure()
@@ -341,151 +1046,445 @@ def update_chart(_, outlets, chart_type, parties, _events):
         )
         return fig, ""
 
-    status = f"סה\"כ {len(df)} סקרים | עדכון אחרון: {df['fetched_at'].max()[:16]}"
+    status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
+    df_ranged = apply_date_range(df, date_range)
 
-    if chart_type == "trend":
-        fig = build_trend(df, events_df, parties or [])
+    # Filter events to only those within the chart's date range
+    events_df = all_sel_events
+    if not events_df.empty and not df_ranged.empty:
+        lo = df_ranged["date"].min()
+        hi = df_ranged["date"].max()
+        events_df = events_df[(events_df["date"] >= lo) & (events_df["date"] <= hi)]
+
+    if view_mode == "blocs":
+        sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
+        fig = build_trend_blocs(df_ranged, events_df, sel_blocs) if chart_type == "trend" \
+            else build_bar_blocs(df_ranged, sel_blocs)
     else:
-        fig = build_bar(df, parties or [])
-
+        fig = build_trend(df_ranged, events_df, parties or []) if chart_type == "trend" \
+            else build_bar(df_ranged, parties or [])
     return fig, status
+
+
+def _merge_beyahad(df):
+    """Merge beyahad with yesh_atid for historical continuity."""
+    df = df.copy()
+    if "beyahad" in df.columns and "yesh_atid" in df.columns:
+        df["beyahad"] = df["beyahad"].fillna(df["yesh_atid"])
+    return df
+
+
+def _add_event_vlines(fig, events_df):
+    for _, ev in events_df.iterrows():
+        color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
+        ev_date = pd.to_datetime(ev["date"])
+        fig.add_shape(type="line", x0=ev_date, x1=ev_date, y0=0, y1=1,
+                      yref="paper", line=dict(color=color, width=1.5, dash="dash"))
+        fig.add_annotation(x=ev_date, y=1, yref="paper", text=ev["title"],
+                           showarrow=False, xanchor="left", yanchor="top",
+                           font=dict(size=9, color=color, family="Heebo, Arial"),
+                           bgcolor="rgba(255,255,255,0.75)", borderpad=2)
 
 
 def build_trend(df, events_df, parties):
     fig = go.Figure()
+    df = _merge_beyahad(df)
     df["date"] = pd.to_datetime(df["date"])
-    df_sorted = df.sort_values("date")
 
     for party in parties:
-        if party not in df_sorted.columns:
+        col = "_beyahad_merged" if party == "beyahad" else party
+        if col not in df.columns and party not in df.columns:
             continue
-        series = df_sorted.groupby("date")[party].mean().reset_index()
+        actual_col = col if col in df.columns else party
+
+        # Group by date: mean mandates + collect outlet names
+        grp = (df.sort_values("date")
+               .groupby("date")
+               .agg({actual_col: "mean",
+                     "media_outlet": lambda x: " · ".join(sorted(x.dropna().unique()))})
+               .rename(columns={actual_col: "mandates"})
+               .dropna(subset=["mandates"])
+               .reset_index())
+        if grp.empty:
+            continue
+        color = PARTY_COLORS.get(party, "#888")
+        label = PARTY_HE.get(party, party)
         fig.add_trace(go.Scatter(
-            x=series["date"],
-            y=series[party],
-            name=PARTY_HE.get(party, party),
+            x=grp["date"],
+            y=grp["mandates"],
+            name=label,
             mode="lines+markers",
-            line=dict(color=PARTY_COLORS.get(party, "#666"), width=2),
-            marker=dict(size=4),
+            line=dict(color=color, width=2.5, shape="spline", smoothing=0.85),
+            marker=dict(size=7, opacity=0.85, color=color, line=dict(width=0)),
+            opacity=0.6,
+            customdata=grp[["media_outlet"]].values,
+            hovertemplate=(
+                f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
+                "%{x|%d/%m/%Y}<br>"
+                "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
+                "<extra></extra>"
+            ),
         ))
 
-    # Event lines
-    for _, ev in events_df.iterrows():
-        color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
-        fig.add_vline(
-            x=ev["date"],
-            line_dash="dash",
-            line_color=color,
-            line_width=1.5,
-            annotation_text=ev["title"],
-            annotation_position="top right",
-            annotation_font_size=10,
-            annotation_font_color=color,
-        )
+    _add_event_vlines(fig, events_df)
+    _style_fig(fig)
+    fig.update_layout(yaxis_title="מנדטים")
+    return fig
 
-    _style_fig(fig, "מגמות מנדטים לאורך זמן")
-    fig.update_layout(xaxis_title="תאריך", yaxis_title="מנדטים", legend_title="מפלגה")
+
+def build_trend_blocs(df, events_df, selected_blocs):
+    fig = go.Figure()
+    df = _merge_beyahad(df)
+    df["date"] = pd.to_datetime(df["date"])
+    for bloc in BLOCS:
+        if bloc["name"] not in selected_blocs:
+            continue
+        cols = [p for p in bloc["parties"] if p in df.columns]
+        if not cols:
+            continue
+        df["_bt"] = df[cols].sum(axis=1, min_count=1)
+        grp = (df.sort_values("date")
+               .groupby("date")
+               .agg({"_bt": "mean",
+                     "media_outlet": lambda x: " · ".join(sorted(x.dropna().unique()))})
+               .dropna(subset=["_bt"])
+               .reset_index())
+        if grp.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=grp["date"], y=grp["_bt"],
+            name=bloc["name"],
+            mode="lines+markers",
+            line=dict(color=bloc["color"], width=2.5, shape="spline", smoothing=0.85),
+            marker=dict(size=7, opacity=0.85, color=bloc["color"], line=dict(width=0)),
+            opacity=0.6,
+            customdata=grp[["media_outlet"]].values,
+            hovertemplate=(
+                f"<b>{bloc['name']}</b>  %{{y:.1f}} מנדטים<br>"
+                "%{x|%d/%m/%Y}<br>"
+                "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
+                "<extra></extra>"
+            ),
+        ))
+    _add_event_vlines(fig, events_df)
+    _style_fig(fig)
+    fig.update_layout(yaxis_title="מנדטים (גושים)")
+    return fig
+
+
+def build_bar_blocs(df, selected_blocs):
+    df = _merge_beyahad(df)
+    blocs_data = {}
+    for bloc in BLOCS:
+        if bloc["name"] not in selected_blocs:
+            continue
+        cols = [p for p in bloc["parties"] if p in df.columns]
+        if not cols:
+            continue
+        blocs_data[bloc["name"]] = df[cols].sum(axis=1, min_count=1).mean()
+    blocs_data = dict(sorted(blocs_data.items(), key=lambda x: -x[1]))
+    color_map = {b["name"]: b["color"] for b in BLOCS}
+    fig = go.Figure(go.Bar(
+        x=list(blocs_data.keys()),
+        y=list(blocs_data.values()),
+        marker_color=[color_map.get(n, "#888") for n in blocs_data],
+        marker_opacity=0.85,
+        text=[f"{v:.1f}" for v in blocs_data.values()],
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br><b>%{y:.1f} מנדטים</b><extra></extra>",
+    ))
+    _style_fig(fig)
+    fig.update_layout(yaxis_title="מנדטים (ממוצע גושים)", bargap=0.35)
     return fig
 
 
 def build_bar(df, parties):
-    averages = {p: df[p].mean() for p in parties if p in df.columns}
+    averages = {
+        p: df[p].mean()
+        for p in parties
+        if p in df.columns and df[p].notna().any()
+    }
     averages = dict(sorted(averages.items(), key=lambda x: -x[1]))
-
     fig = go.Figure(go.Bar(
         x=[PARTY_HE.get(p, p) for p in averages],
         y=list(averages.values()),
-        marker_color=[PARTY_COLORS.get(p, "#666") for p in averages],
+        marker_color=[PARTY_COLORS.get(p, "#888") for p in averages],
+        marker_opacity=0.85,
         text=[f"{v:.1f}" for v in averages.values()],
         textposition="outside",
+        hovertemplate="<b>%{x}</b><br><b>%{y:.1f} מנדטים</b><extra></extra>",
     ))
-    _style_fig(fig, "ממוצע מנדטים")
-    fig.update_layout(
-        xaxis_title="מפלגה",
-        yaxis_title="מנדטים (ממוצע)",
-        bargap=0.3,
-    )
+    _style_fig(fig)
+    fig.update_layout(yaxis_title="מנדטים (ממוצע)", bargap=0.35)
     return fig
 
 
-def _style_fig(fig, title):
+def _style_fig(fig):
     fig.update_layout(
-        title=dict(text=title, font_size=16, font_family="Arial", x=1, xanchor="right"),
-        paper_bgcolor="#fff",
-        plot_bgcolor="#fff",
-        font_family="Arial",
-        legend=dict(orientation="h", y=-0.25),
-        margin=dict(l=40, r=40, t=60, b=80),
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        font=dict(family="Heebo, Arial", color="#1A1A1A", size=12),
+        legend=dict(orientation="h", y=-0.16, font_size=11,
+                    bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=40, r=20, t=48, b=32),
+        hovermode="closest",
+        hoverdistance=40,
+        hoverlabel=dict(bgcolor="#3D1040", font_color="#CCDD00",
+                        font_family="Heebo, Arial", namelength=-1),
     )
-    fig.update_xaxes(showgrid=False, zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0", zeroline=False)
+    fig.update_xaxes(showgrid=False, zeroline=False,
+                     tickfont=dict(size=10, color="#6B6B6B"))
+    fig.update_yaxes(showgrid=True, gridcolor="#F0EBF5",
+                     zeroline=False, tickfont=dict(size=10, color="#6B6B6B"))
 
 
-# ── Events CRUD ───────────────────────────────────────────────────────────────
+# ── Events box ────────────────────────────────────────────────────────────────
 @app.callback(
-    Output("events-list", "children"),
-    Output("event-title", "value"),
-    Output("event-desc", "value"),
-    Input("add-event-btn", "n_clicks"),
+    Output("events-box-container", "children"),
     Input("interval", "n_intervals"),
-    State("event-date", "date"),
-    State("event-title", "value"),
-    State("event-desc", "value"),
-    State("event-category", "value"),
-    prevent_initial_call=True,
+    Input("selected-events", "data"),
 )
-def manage_events(n_clicks, _, date, title, desc, category):
-    ctx = callback_context
-    trigger = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
-
-    if "add-event-btn" in trigger and title and date:
-        add_event(date, title, desc or "", category or "אחר")
-
+def render_events_box(_, selected_ids):
     events_df = load_events()
-    items = []
+    if events_df.empty:
+        return html.Div()
+    sel = set(selected_ids or [])
+    pills = []
     for _, ev in events_df.iterrows():
-        color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
-        items.append(html.Div([
-            html.Span([
-                html.Span(ev["date"][:10], className="event-date"),
-                html.Span(ev["title"]),
-            ]),
-            html.Button("×", id={"type": "del-event", "index": ev["id"]},
-                        className="delete-btn"),
-        ], className="event-item", style={"borderRightColor": color, "borderRightWidth": "3px",
-                                           "borderRightStyle": "solid", "paddingRight": "8px"}))
-
-    clear_title = "" if "add-event-btn" in trigger else no_update
-    clear_desc = "" if "add-event-btn" in trigger else no_update
-    return items, clear_title, clear_desc
+        eid = int(ev["id"])
+        active = eid in sel
+        color = EVENT_COLORS.get(ev.get("category", "אחר"), "#607D8B")
+        style = {
+            "borderColor": color,
+            "color": "white" if active else color,
+            "backgroundColor": color if active else "transparent",
+        }
+        pills.append(html.Button(
+            ev["title"],
+            id={"type": "ev-pill", "eid": eid},
+            className=f"ev-pill {'active' if active else ''}",
+            style=style,
+            n_clicks=0,
+        ))
+    return html.Div([
+        html.Div("אירועים חדשותיים", className="events-box-title"),
+        html.Div(pills, className="events-pills-wrap"),
+    ], className="events-box")
 
 
 @app.callback(
-    Output("events-list", "children", allow_duplicate=True),
-    Input({"type": "del-event", "index": ALL}, "n_clicks"),
+    Output("selected-events", "data"),
+    Input({"type": "ev-pill", "eid": ALL}, "n_clicks"),
+    State("selected-events", "data"),
     prevent_initial_call=True,
 )
-def delete_event_cb(n_clicks_list):
+def toggle_event(_, selected):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
-    prop = ctx.triggered[0]["prop_id"]
-    event_id = eval(prop.split(".")[0])["index"]
-    delete_event(event_id)
+    eid = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["eid"]
+    selected = list(selected or [])
+    if eid in selected:
+        selected.remove(eid)
+    else:
+        selected.append(eid)
+    return selected
+
+
+# ── Blocs bar ─────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("blocs-container", "children"),
+    Input("interval", "n_intervals"),
+    Input("selected-outlets", "data"),
+    Input("date-range", "data"),
+)
+def update_blocs(_, outlets, date_range):
+    df = load_polls(outlets or None)
+    if df.empty:
+        return html.Div()
+
+    df = apply_date_range(df, date_range)
+    if df.empty:
+        return html.Div()
+
+    # For beyahad: merge with yesh_atid historically
+    if "beyahad" in df.columns and "yesh_atid" in df.columns:
+        df = df.copy()
+        df["beyahad"] = df["beyahad"].fillna(df["yesh_atid"])
+
+    # Calculate average mandates per bloc
+    bloc_totals = []
+    for bloc in BLOCS:
+        cols = [p for p in bloc["parties"] if p in df.columns]
+        if not cols:
+            bloc_totals.append(0)
+            continue
+        total = df[cols].sum(axis=1).mean()
+        bloc_totals.append(round(total, 1))
+
+    total_mandates = sum(bloc_totals)
+
+    # Build horizontal stacked bar
+    fig = go.Figure()
+    for bloc, total in zip(BLOCS, bloc_totals):
+        if total <= 0:
+            continue
+        fig.add_trace(go.Bar(
+            x=[total],
+            y=["כנסת"],
+            name=bloc["name"],
+            orientation="h",
+            marker_color=bloc["color"],
+            marker_opacity=0.88,
+            text=f"{bloc['name']}<br>{total:.0f}",
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(color="white", size=10, family="Heebo, Arial"),
+            hovertemplate=f"<b>{bloc['name']}</b><br>{total:.1f} מנדטים<extra></extra>",
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        height=72,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=False,
+        font=dict(family="Heebo, Arial"),
+        dragmode=False,
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False,
+                   fixedrange=True, range=[0, 120]),
+        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False, fixedrange=True),
+        hoverlabel=dict(bgcolor="#3D1040", font_color="#CCDD00", font_family="Heebo, Arial"),
+    )
+
+    # Legend — right to left order (ימין קיצוני first)
+    legend_items = [
+        html.Div([
+            html.Div(className="bloc-dot", style={"backgroundColor": b["color"]}),
+            html.Span(f"{b['name']} {t:.0f}"),
+        ], className="bloc-legend-item")
+        for b, t in zip(reversed(BLOCS), reversed(bloc_totals)) if t > 0
+    ]
+
+    return html.Div([
+        html.Div("מפת הגושים", className="blocs-title"),
+        dcc.Graph(figure=fig, config={"displayModeBar": False, "scrollZoom": False}),
+        html.Div(legend_items, className="blocs-legend"),
+    ], className="blocs-section")
+
+
+# ── Hover highlight — opacity only, no width change ───────────────────────────
+app.clientside_callback(
+    """
+    function(hoverData, figure) {
+        if (!figure || !figure.data || figure.data.length === 0) {
+            return window.dash_clientside.no_update;
+        }
+        var fig = JSON.parse(JSON.stringify(figure));
+        var n = fig.data.length;
+
+        if (hoverData && hoverData.points && hoverData.points.length > 0) {
+            var cn = hoverData.points[0].curveNumber;
+            for (var i = 0; i < n; i++) {
+                if (fig.data[i].type === 'scatter') {
+                    fig.data[i].opacity = (i === cn) ? 1.0 : 0.1;
+                }
+            }
+        } else {
+            for (var i = 0; i < n; i++) {
+                if (fig.data[i].type === 'scatter') {
+                    fig.data[i].opacity = 0.5;
+                }
+            }
+        }
+        return fig;
+    }
+    """,
+    Output("main-chart", "figure", allow_duplicate=True),
+    Input("main-chart", "hoverData"),
+    State("main-chart", "figure"),
+    prevent_initial_call=True,
+)
+
+
+# ── Admin auth ────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("admin-auth", "data"),
+    Output("admin-login-error", "children"),
+    Output("admin-panel", "style"),
+    Output("admin-gate", "style"),
+    Output("admin-events-list", "children", allow_duplicate=True),
+    Input("admin-login-btn", "n_clicks"),
+    State("admin-password", "value"),
+    State("admin-auth", "data"),
+    prevent_initial_call=True,
+)
+def admin_login(_, password, already_auth):
+    if already_auth or password == ADMIN_PASSWORD:
+        return True, "", {"display": "block"}, {"display": "none"}, _render_event_list()
+    return False, "סיסמה שגויה", {"display": "none"}, {"display": "block"}, no_update
+
+
+# ── Admin events ──────────────────────────────────────────────────────────────
+def _render_event_list():
     events_df = load_events()
     items = []
     for _, ev in events_df.iterrows():
         color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
         items.append(html.Div([
-            html.Span([
-                html.Span(ev["date"][:10], className="event-date"),
-                html.Span(ev["title"]),
+            html.Div([
+                html.Div(ev["title"], style={"fontWeight": "600"}),
+                html.Div(
+                    f"{str(ev['date'])[:10]}  ·  {ev.get('category', '')}",
+                    style={"fontSize": "0.72rem", "color": "#888", "marginTop": "2px"},
+                ),
             ]),
-            html.Button("×", id={"type": "del-event", "index": ev["id"]}, className="delete-btn"),
-        ], className="event-item", style={"borderRightColor": color, "borderRightWidth": "3px",
-                                           "borderRightStyle": "solid", "paddingRight": "8px"}))
+            html.Button("×",
+                        id={"type": "admin-del", "index": int(ev["id"])},
+                        className="del-btn"),
+        ], className="event-admin-item",
+           style={"borderRightColor": color}))
     return items
 
 
+@app.callback(
+    Output("admin-events-list", "children"),
+    Output("admin-event-title", "value"),
+    Output("admin-event-desc", "value"),
+    Input("admin-add-btn", "n_clicks"),
+    State("admin-auth", "data"),
+    State("admin-event-date", "date"),
+    State("admin-event-title", "value"),
+    State("admin-event-desc", "value"),
+    State("admin-event-category", "value"),
+    prevent_initial_call=True,
+)
+def manage_admin_events(n_clicks, auth, date, title, desc, category):
+    if not auth:
+        return no_update, no_update, no_update
+    if n_clicks and title and date:
+        add_event_db(date, title, desc or "", category or "אחר")
+        return _render_event_list(), "", ""
+    return _render_event_list(), no_update, no_update
+
+
+@app.callback(
+    Output("admin-events-list", "children", allow_duplicate=True),
+    Input({"type": "admin-del", "index": ALL}, "n_clicks"),
+    State("admin-auth", "data"),
+    prevent_initial_call=True,
+)
+def delete_admin_event(n_clicks_list, auth):
+    if not auth:
+        return no_update
+    ctx = callback_context
+    if not ctx.triggered or not any(n for n in (n_clicks_list or []) if n):
+        return no_update
+    event_id = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["index"]
+    delete_event_db(event_id)
+    return _render_event_list()
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=8050)
+    app.run(debug=False, host="0.0.0.0", port=8050)
