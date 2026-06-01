@@ -805,7 +805,7 @@ app.layout = html.Div([
 @app.callback(
     Output("page-content", "children"),
     Input("url", "pathname"),
-    State("site-auth-store", "data"),
+    Input("site-auth-store", "data"),
 )
 def render_page(pathname, auth_data):
     is_auth = auth_data.get("authenticated", False) if auth_data else False
