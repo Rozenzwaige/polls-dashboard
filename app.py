@@ -1242,35 +1242,41 @@ def _merge_beyahad(df):
 def _add_event_vlines(fig, events_df):
     if events_df.empty:
         return
-    # Sort by date and stagger labels vertically to avoid overlap
     df = events_df.copy()
     df["_dt"] = pd.to_datetime(df["date"])
     df = df.sort_values("_dt").reset_index(drop=True)
 
-    Y_LEVELS = [1.0, 0.88, 0.76, 0.64]   # stagger up to 4 levels
-    date_level = {}   # track last used level per "slot"
+    # Labels staggered ABOVE the plot area — 4 levels above y=1
+    Y_ABOVE = [1.02, 1.10, 1.18, 1.26]
+    LABEL_BG   = "#CCDD00"   # lime — same as header stripe
+    LABEL_FG   = "#3D1040"   # dark purple text
+    LINE_COLOR = "#9370DB"   # muted purple for the dashed line
 
     for i, ev in df.iterrows():
-        color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
         ev_date = ev["_dt"]
+        y_pos = Y_ABOVE[i % len(Y_ABOVE)]
 
-        # Find which level is free (not recently used for a close date)
-        level_idx = i % len(Y_LEVELS)
-        y_pos = Y_LEVELS[level_idx]
-
+        # Dashed line spanning full plot height
         fig.add_shape(type="line", x0=ev_date, x1=ev_date, y0=0, y1=1,
-                      yref="paper", line=dict(color=color, width=1.5, dash="dash"))
+                      yref="paper", layer="below",
+                      line=dict(color=LINE_COLOR, width=1.2, dash="dash"))
+        # Label above the plot
         fig.add_annotation(
             x=ev_date, y=y_pos, yref="paper",
             text=ev["title"],
-            showarrow=False, xanchor="left", yanchor="top",
-            font=dict(size=9, color="#fff", family="Heebo, Arial"),
-            bgcolor=color,
+            showarrow=False, xanchor="center", yanchor="bottom",
+            font=dict(size=8.5, color=LABEL_FG, family="Heebo, Arial"),
+            bgcolor=LABEL_BG,
             borderpad=3,
-            bordercolor=color,
+            bordercolor=LABEL_BG,
             borderwidth=1,
-            opacity=0.9,
+            opacity=0.95,
         )
+
+    # Extend top margin to fit labels
+    n_levels = min(len(df), len(Y_ABOVE))
+    extra_top = 28 + (n_levels - 1) * 22
+    fig.update_layout(margin_t=max(80, extra_top))
 
 
 def _empty_chart(msg="טוען נתונים..."):
