@@ -33,12 +33,19 @@ BLOCS = [
     {"name": "ימין קיצוני",      "parties": ["zionut_datit", "otzma_yehudit"],                                        "color": "#7F1D1D"},
 ]
 
-DEFAULT_PARTIES = list({
-    "likud", "yahadut_tora", "shas", "kahol_lavan", "yesh_atid",
-    "hadash_taal", "israel_beiteinu", "demokratim", "zionut_datit",
-    "raam", "balad", "otzma_yehudit", "beyahad", "yashar",
-    "miluimnikim", "reshima_meshutefet",
-})
+DEFAULT_PARTIES = [
+    "likud", "yahadut_tora", "shas", "kahol_lavan",
+    "israel_beiteinu", "demokratim", "zionut_datit",
+    "otzma_yehudit", "beyahad", "yashar", "miluimnikim",
+    "hadash_taal", "raam", "balad",
+    # יש עתיד ורשימה ערבית כבויים כברירת מחדל
+]
+
+# מפלגות שלא יכולות להיות פעילות ביחד
+MUTUALLY_EXCLUSIVE = [
+    {"yesh_atid", "beyahad"},                              # יש עתיד / ביחד
+    {"reshima_meshutefet", "balad", "hadash_taal", "raam"}, # רשימה ערבית / מפלגות ערביות
+]
 
 PARTY_HE = {
     "likud":              "הליכוד",
@@ -615,6 +622,13 @@ app.index_string = """<!DOCTYPE html>
   .feed-type-poll .feed-title { color: var(--purple); }
   .feed-type-alert .feed-title { color: var(--coral); }
 
+  /* ── Kill Plotly crosshair cursor ── */
+  #main-chart .js-plotly-plot,
+  #main-chart .js-plotly-plot *,
+  #main-chart svg,
+  #main-chart .nsewdrag,
+  #main-chart .drag { cursor: default !important; }
+
   /* ── Date range strip ── */
   .date-range-strip {
     display: flex;
@@ -1126,6 +1140,12 @@ def toggle_party(n_clicks_list, selected):
         selected.remove(party)
     else:
         selected.append(party)
+        # כבה מפלגות שלא יכולות לדור יחד
+        for group in MUTUALLY_EXCLUSIVE:
+            if party in group:
+                for other in group:
+                    if other != party and other in selected:
+                        selected.remove(other)
     return selected
 
 
@@ -1541,9 +1561,7 @@ def _style_fig(fig):
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
         font=dict(family="Heebo, Arial", color="#1A1A1A", size=12),
-        legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center",
-                    font_size=11, bgcolor="rgba(0,0,0,0)",
-                    itemclick=False, itemdoubleclick=False),
+        showlegend=False,
         margin=dict(l=40, r=20, t=48, b=32),
         hovermode="closest",
         dragmode=False,
@@ -1722,44 +1740,6 @@ def update_blocs(_, outlets, date_range):
     ], className="blocs-section")
 
 
-# ── Hover highlight — dim others, highlight hovered ──────────────────────────
-app.clientside_callback(
-    """
-    function(hoverData, figure) {
-        if (!figure || !figure.data || figure.data.length === 0) {
-            return window.dash_clientside.no_update;
-        }
-        var fig = JSON.parse(JSON.stringify(figure));
-        var n = fig.data.length;
-
-        if (hoverData && hoverData.points && hoverData.points.length > 0) {
-            var cn = hoverData.points[0].curveNumber;
-            for (var i = 0; i < n; i++) {
-                if (fig.data[i].type === 'scatter') {
-                    fig.data[i].opacity = (i === cn) ? 1.0 : 0.12;
-                    if (i === cn) {
-                        fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 3.5});
-                    } else {
-                        fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 2.5});
-                    }
-                }
-            }
-        } else {
-            for (var i = 0; i < n; i++) {
-                if (fig.data[i].type === 'scatter') {
-                    fig.data[i].opacity = 1.0;
-                    fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 2.5});
-                }
-            }
-        }
-        return fig;
-    }
-    """,
-    Output("main-chart", "figure", allow_duplicate=True),
-    Input("main-chart", "hoverData"),
-    State("main-chart", "figure"),
-    prevent_initial_call=True,
-)
 
 
 # ── Admin auth ────────────────────────────────────────────────────────────────
