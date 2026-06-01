@@ -690,6 +690,8 @@ def public_layout():
         dcc.Store(id="date-range", data="3month"),
         dcc.Store(id="view-mode", data="parties"),
         dcc.Store(id="selected-blocs", data=[b["name"] for b in BLOCS]),
+        dcc.Store(id="shown-parties", data=DEFAULT_PARTIES),
+        dcc.Store(id="shown-blocs",   data=[b["name"] for b in BLOCS]),
 
         html.Header([
             html.Img(src="/assets/rose.png", className="header-rose"),
@@ -1036,13 +1038,19 @@ def toggle_outlet(_, selected):
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
     Input("chart-type", "data"),
+    Input("shown-parties", "data"),
+    Input("shown-blocs",   "data"),
 )
-def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type):
+def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_parties, shown_blocs):
+    shown_parties = set(shown_parties or [])
+    shown_blocs   = set(shown_blocs   or [b["name"] for b in BLOCS])
+
     if view_mode == "blocs":
         sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
         pills = []
         for bloc in BLOCS:
-            active = bloc["name"] in sel_blocs
+            # active = selected AND actually shown in chart
+            active = bloc["name"] in sel_blocs and bloc["name"] in shown_blocs
             color = bloc["color"]
             party_names = ", ".join(PARTY_HE.get(p, p) for p in bloc["parties"] if p in PARTY_HE)
             pills.append(html.Button(
@@ -1070,7 +1078,8 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type):
     pills = []
     for key, name in PARTY_HE.items():
         color = PARTY_COLORS.get(key, "#888")
-        active = key in sel_parties
+        # active = selected AND actually shown in chart
+        active = key in (sel_parties or []) and key in shown_parties
         pills.append(html.Button(
             name,
             id={"type": "party-pill", "party": key},
@@ -1145,6 +1154,8 @@ def apply_date_range(df, date_range):
 @app.callback(
     Output("main-chart", "figure"),
     Output("header-status", "children"),
+    Output("shown-parties", "data"),
+    Output("shown-blocs",   "data"),
     Input("interval", "n_intervals"),
     Input("selected-outlets", "data"),
     Input("chart-type", "data"),
@@ -1167,7 +1178,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             annotations=[dict(text="טוען נתונים...", showarrow=False, font_size=18)],
             paper_bgcolor="#fff", plot_bgcolor="#fff",
         )
-        return fig, ""
+        return fig, "", [], []
 
     status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
     df_ranged = apply_date_range(df, date_range)
@@ -1182,14 +1193,25 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
         hi = df_ranged["date"].max()
         events_df = events_df[(events_df["date"] >= lo) & (events_df["date"] <= hi)]
 
+    parties = parties or []
+    sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
+
     if view_mode == "blocs":
-        sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
         fig = build_trend_blocs(df_ranged, events_df, sel_blocs, show_markers) if chart_type == "trend" \
             else build_bar_blocs(df_ranged, sel_blocs)
+        # blocs actually shown = those with data
+        shown_blocs = [b for b in sel_blocs if any(
+            p in df_ranged.columns and df_ranged[p].notna().any()
+            for p in next((x["parties"] for x in BLOCS if x["name"] == b), [])
+        )]
+        return fig, status, parties, shown_blocs
     else:
-        fig = build_trend(df_ranged, events_df, parties or [], show_markers) if chart_type == "trend" \
-            else build_bar(df_ranged, parties or [])
-    return fig, status
+        fig = build_trend(df_ranged, events_df, parties, show_markers) if chart_type == "trend" \
+            else build_bar(df_ranged, parties)
+        # parties actually shown = those with data in range
+        shown = [p for p in parties
+                 if p in df_ranged.columns and df_ranged[p].notna().any()]
+        return fig, status, shown, sel_blocs
 
 
 
