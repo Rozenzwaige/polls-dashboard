@@ -588,10 +588,13 @@ app.index_string = """<!DOCTYPE html>
   .date-range-strip {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 4px;
-    padding: 8px 14px 0;
+    padding: 10px 14px 6px;
     background: var(--white);
     border: none;
+    border-bottom: 1.5px solid var(--border);
+    margin-bottom: 6px;
   }
   .dr-label { font-size: 0.7rem; color: var(--muted); font-weight: 700; margin-left: 6px; }
   .dr-btn {
@@ -1136,6 +1139,9 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
     status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
     df_ranged = apply_date_range(df, date_range)
 
+    # Show markers only for short periods (≤ 3 months)
+    show_markers = date_range in ("2weeks", "month", "3month")
+
     # Filter events to only those within the chart's date range
     events_df = all_sel_events
     if not events_df.empty and not df_ranged.empty:
@@ -1145,10 +1151,10 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
 
     if view_mode == "blocs":
         sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
-        fig = build_trend_blocs(df_ranged, events_df, sel_blocs) if chart_type == "trend" \
+        fig = build_trend_blocs(df_ranged, events_df, sel_blocs, show_markers) if chart_type == "trend" \
             else build_bar_blocs(df_ranged, sel_blocs)
     else:
-        fig = build_trend(df_ranged, events_df, parties or []) if chart_type == "trend" \
+        fig = build_trend(df_ranged, events_df, parties or [], show_markers) if chart_type == "trend" \
             else build_bar(df_ranged, parties or [])
     return fig, status
 
@@ -1173,7 +1179,7 @@ def _add_event_vlines(fig, events_df):
                            bgcolor="rgba(255,255,255,0.75)", borderpad=2)
 
 
-def build_trend(df, events_df, parties):
+def build_trend(df, events_df, parties, show_markers=True):
     fig = go.Figure()
     df = _merge_beyahad(df)
     df["date"] = pd.to_datetime(df["date"])
@@ -1200,10 +1206,10 @@ def build_trend(df, events_df, parties):
             x=grp["date"],
             y=grp["mandates"],
             name=label,
-            mode="lines+markers",
+            mode="lines+markers" if show_markers else "lines",
             line=dict(color=color, width=2.5, shape="spline", smoothing=0.85),
-            marker=dict(size=7, opacity=0.85, color=color, line=dict(width=0)),
-            opacity=0.6,
+            marker=dict(size=7, opacity=0.9, color=color, line=dict(width=0)),
+            opacity=1.0,
             customdata=grp[["media_outlet"]].values,
             hovertemplate=(
                 f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
@@ -1219,7 +1225,7 @@ def build_trend(df, events_df, parties):
     return fig
 
 
-def build_trend_blocs(df, events_df, selected_blocs):
+def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
     fig = go.Figure()
     df = _merge_beyahad(df)
     df["date"] = pd.to_datetime(df["date"])
@@ -1241,10 +1247,10 @@ def build_trend_blocs(df, events_df, selected_blocs):
         fig.add_trace(go.Scatter(
             x=grp["date"], y=grp["_bt"],
             name=bloc["name"],
-            mode="lines+markers",
+            mode="lines+markers" if show_markers else "lines",
             line=dict(color=bloc["color"], width=2.5, shape="spline", smoothing=0.85),
-            marker=dict(size=7, opacity=0.85, color=bloc["color"], line=dict(width=0)),
-            opacity=0.6,
+            marker=dict(size=7, opacity=0.9, color=bloc["color"], line=dict(width=0)),
+            opacity=1.0,
             customdata=grp[["media_outlet"]].values,
             hovertemplate=(
                 f"<b>{bloc['name']}</b>  %{{y:.1f}} מנדטים<br>"
@@ -1461,7 +1467,7 @@ def update_blocs(_, outlets, date_range):
     ], className="blocs-section")
 
 
-# ── Hover highlight — opacity only, no width change ───────────────────────────
+# ── Hover highlight — dim others, highlight hovered ──────────────────────────
 app.clientside_callback(
     """
     function(hoverData, figure) {
@@ -1475,13 +1481,19 @@ app.clientside_callback(
             var cn = hoverData.points[0].curveNumber;
             for (var i = 0; i < n; i++) {
                 if (fig.data[i].type === 'scatter') {
-                    fig.data[i].opacity = (i === cn) ? 1.0 : 0.1;
+                    fig.data[i].opacity = (i === cn) ? 1.0 : 0.12;
+                    if (i === cn) {
+                        fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 3.5});
+                    } else {
+                        fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 2.5});
+                    }
                 }
             }
         } else {
             for (var i = 0; i < n; i++) {
                 if (fig.data[i].type === 'scatter') {
-                    fig.data[i].opacity = 0.5;
+                    fig.data[i].opacity = 1.0;
+                    fig.data[i].line = Object.assign({}, fig.data[i].line, {width: 2.5});
                 }
             }
         }
