@@ -1293,10 +1293,12 @@ def _empty_chart(msg="טוען נתונים..."):
 
 
 def _smooth(series, n_points):
-    """Gaussian-weighted rolling average. Window scales with data density."""
+    """Double-pass centered rolling average (no scipy needed)."""
     window = max(3, min(n_points // 6, 20))
-    return series.rolling(window=window, center=True, min_periods=1,
-                          win_type="gaussian").mean(std=window / 3)
+    s = series.rolling(window=window, center=True, min_periods=1).mean()
+    # Second pass to soften edges further
+    s = s.rolling(window=max(3, window // 2), center=True, min_periods=1).mean()
+    return s
 
 
 def build_trend(df, events_df, parties, show_markers=True):
