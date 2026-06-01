@@ -14,13 +14,11 @@ from dash import (
     ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update,
 )
 import dash_bootstrap_components as dbc
-from flask import session, redirect, request as flask_request
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from scraper import DB_PATH, init_db, run_scrape
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "rozamedia2026")
-SITE_PASSWORD  = os.environ.get("SITE_PASSWORD",  "Rosa2026!!")
 _DATA = os.environ.get("DATA_DIR", ".")
 EVENTS_DB_PATH = f"{_DATA}/events.db"   # separate from polls.db — never deleted on schema reset
 
@@ -203,78 +201,6 @@ app = Dash(
     title="רוזה ניוז | בחירות 2026",
     suppress_callback_exceptions=True,
 )
-
-# ── Site-wide password protection ────────────────────────────────────────────
-app.server.secret_key = os.environ.get("SECRET_KEY", "roza-polls-flask-secret-2026")
-
-_OPEN_PATHS = ("/login", "/assets/", "/_dash", "/favicon")
-
-@app.server.before_request
-def require_login():
-    if any(flask_request.path.startswith(p) for p in _OPEN_PATHS):
-        return None
-    if not session.get("site_auth"):
-        return redirect("/login")
-
-LOGIN_PAGE = """<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>רוזה ניוז — כניסה</title>
-<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:"Heebo",Arial,sans-serif;background:#E8D5F5;
-       display:flex;align-items:center;justify-content:center;
-       min-height:100vh;direction:rtl}
-  .card{background:#fff;border-radius:8px;padding:40px 48px;
-        width:360px;text-align:center;box-shadow:0 4px 32px rgba(61,16,64,.12)}
-  .logo{height:52px;margin-bottom:20px;filter:invert(1) brightness(.15)}
-  h1{font-size:1.25rem;font-weight:900;color:#3D1040;margin-bottom:6px}
-  p{font-size:.82rem;color:#888;margin-bottom:28px}
-  input{width:100%;padding:10px 14px;border:1.5px solid #E0D8E8;
-        border-radius:4px;font-family:inherit;font-size:.95rem;
-        direction:ltr;text-align:center;outline:none;margin-bottom:14px;
-        transition:border .15s}
-  input:focus{border-color:#3D1040}
-  button{width:100%;padding:11px;background:#D93025;color:#fff;
-         border:none;border-radius:4px;font-family:inherit;
-         font-size:1rem;font-weight:700;cursor:pointer;transition:background .13s}
-  button:hover{background:#8B0000}
-  .error{color:#D93025;font-size:.82rem;margin-top:10px}
-  .stripe{height:3px;background:#CCDD00;border-radius:0 0 2px 2px;margin-bottom:28px}
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="stripe"></div>
-  <img src="/assets/rose.png" class="logo" alt="רוזה ניוז">
-  <h1>רוזה ניוז — בחירות 2026</h1>
-  <p>אנא הזן את הסיסמה כדי להמשיך</p>
-  <form method="post">
-    <input type="password" name="password" placeholder="סיסמה" autofocus>
-    <button type="submit">כניסה</button>
-    {error}
-  </form>
-</div>
-</body>
-</html>"""
-
-@app.server.route("/login", methods=["GET", "POST"])
-def login():
-    error = ""
-    if flask_request.method == "POST":
-        if flask_request.form.get("password") == SITE_PASSWORD:
-            session["site_auth"] = True
-            return redirect("/")
-        error = '<p class="error">סיסמה שגויה — נסה שוב</p>'
-    return LOGIN_PAGE.format(error=error)
-
-@app.server.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
 
 app.index_string = """<!DOCTYPE html>
 <html dir="rtl" lang="he">
