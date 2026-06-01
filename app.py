@@ -590,11 +590,11 @@ app.index_string = """<!DOCTYPE html>
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 10px 14px 6px;
+    padding: 8px 14px;
     background: var(--white);
     border: none;
     border-bottom: 1.5px solid var(--border);
-    margin-bottom: 6px;
+    margin-bottom: 0;
   }
   .dr-label { font-size: 0.7rem; color: var(--muted); font-weight: 700; margin-left: 6px; }
   .dr-btn {
@@ -698,6 +698,17 @@ def public_layout():
 
                 # MIDDLE: chart + party pills
                 dbc.Col([
+                    # Date range strip — TOP, above chart
+                    html.Div([
+                        html.Span("תקופה:", className="dr-label"),
+                        html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
+                        html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
+                        html.Button("3 חודשים", id="dr-3month", className="dr-btn",        n_clicks=0),
+                        html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
+                        html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
+                        html.Button("הכל",      id="dr-all",    className="dr-btn active", n_clicks=0),
+                    ], className="date-range-strip"),
+
                     html.Div([
                         # מגמות/ממוצע — top LEFT
                         html.Div([
@@ -717,17 +728,6 @@ def public_layout():
                                   config={"displayModeBar": False},
                                   style={"height": "490px"}),
                     ], className="chart-wrapper"),
-
-                    # Date range strip
-                    html.Div([
-                        html.Span("תקופה:", className="dr-label"),
-                        html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
-                        html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
-                        html.Button("3 חודשים", id="dr-3month", className="dr-btn",        n_clicks=0),
-                        html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
-                        html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
-                        html.Button("הכל",      id="dr-all",    className="dr-btn active", n_clicks=0),
-                    ], className="date-range-strip"),
 
                     html.Div(id="party-pills-container", className="party-pills-row"),
                     html.Div(id="status-row", className="status-row"),
@@ -1004,8 +1004,11 @@ def toggle_outlet(_, selected):
     Input("selected-parties", "data"),
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
+    Input("chart-type", "data"),
+    Input("date-range", "data"),
+    Input("selected-outlets", "data"),
 )
-def render_bottom_pills(sel_parties, view_mode, sel_blocs):
+def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, date_range, outlets):
     if view_mode == "blocs":
         sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
         pills = []
@@ -1034,12 +1037,47 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs):
 
     # Party mode (default)
     sel_parties = sel_parties or []
+
+    # Compute trend % for "bar" (ממוצע) mode
+    trend_map = {}
+    if chart_type == "bar":
+        try:
+            df_all = load_polls(outlets or None)
+            df_all["date"] = pd.to_datetime(df_all["date"])
+            df_ranged = apply_date_range(df_all, date_range)
+            if not df_ranged.empty and len(df_ranged) >= 2:
+                df_ranged = df_ranged.sort_values("date")
+                mid = df_ranged["date"].iloc[len(df_ranged) // 2]
+                first_half = df_ranged[df_ranged["date"] <= mid]
+                second_half = df_ranged[df_ranged["date"] > mid]
+                for key in PARTY_HE:
+                    if key in df_ranged.columns:
+                        v1 = first_half[key].dropna().mean()
+                        v2 = second_half[key].dropna().mean()
+                        if pd.notna(v1) and pd.notna(v2) and v1 > 0:
+                            trend_map[key] = round(((v2 - v1) / v1) * 100, 1)
+        except Exception:
+            pass
+
     pills = []
     for key, name in PARTY_HE.items():
         color = PARTY_COLORS.get(key, "#888")
         active = key in sel_parties
+
+        label_parts = [html.Span(name)]
+        if chart_type == "bar" and key in trend_map:
+            pct = trend_map[key]
+            arrow = "▲" if pct > 0 else "▼"
+            arrow_color = "#2E7D32" if pct > 0 else "#D93025"
+            label_parts.append(html.Span(
+                [html.Span(arrow, style={"color": arrow_color, "fontSize": "0.65rem"}),
+                 html.Span(f" {abs(pct)}%", style={"color": "#555"})],
+                style={"display": "block", "fontSize": "0.62rem",
+                       "fontWeight": "400", "marginTop": "2px", "lineHeight": "1"},
+            ))
+
         pills.append(html.Button(
-            name,
+            label_parts,
             id={"type": "party-pill", "party": key},
             className=f"p-pill {'active' if active else ''}",
             n_clicks=0,
@@ -1047,6 +1085,7 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs):
                 "color": "white" if active else color,
                 "backgroundColor": color if active else "transparent",
                 "borderColor": color,
+                "paddingBlock": "4px" if chart_type == "bar" and key in trend_map else "",
             },
         ))
     return pills
@@ -1160,11 +1199,8 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
 
 
 def _merge_beyahad(df):
-    """Merge beyahad with yesh_atid for historical continuity."""
-    df = df.copy()
-    if "beyahad" in df.columns and "yesh_atid" in df.columns:
-        df["beyahad"] = df["beyahad"].fillna(df["yesh_atid"])
-    return df
+    """Keep beyahad only where it actually appears — do NOT fill from yesh_atid."""
+    return df.copy()
 
 
 def _add_event_vlines(fig, events_df):
@@ -1317,8 +1353,8 @@ def _style_fig(fig):
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
         font=dict(family="Heebo, Arial", color="#1A1A1A", size=12),
-        legend=dict(orientation="h", y=-0.16, font_size=11,
-                    bgcolor="rgba(0,0,0,0)"),
+        legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center",
+                    font_size=11, bgcolor="rgba(0,0,0,0)"),
         margin=dict(l=40, r=20, t=48, b=32),
         hovermode="closest",
         hoverdistance=40,
@@ -1336,8 +1372,11 @@ def _style_fig(fig):
     Output("events-box-container", "children"),
     Input("interval", "n_intervals"),
     Input("selected-events", "data"),
+    Input("chart-type", "data"),
 )
-def render_events_box(_, selected_ids):
+def render_events_box(_, selected_ids, chart_type):
+    if chart_type == "bar":
+        return html.Div()
     events_df = load_events()
     sel = set(selected_ids or [])
     pills = []
