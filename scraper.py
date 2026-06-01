@@ -180,6 +180,9 @@ def run_scrape():
         new = upsert(df, conn)
         log.info("Done — %d new polls added", new)
         return new
+    except Exception as e:
+        log.warning("Scrape failed (will retry later): %s", e)
+        return 0
     finally:
         conn.close()
 
