@@ -1005,10 +1005,8 @@ def toggle_outlet(_, selected):
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
     Input("chart-type", "data"),
-    Input("date-range", "data"),
-    Input("selected-outlets", "data"),
 )
-def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, date_range, outlets):
+def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type):
     if view_mode == "blocs":
         sel_blocs = sel_blocs or [b["name"] for b in BLOCS]
         pills = []
@@ -1038,46 +1036,12 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, date_rang
     # Party mode (default)
     sel_parties = sel_parties or []
 
-    # Compute trend % for "bar" (ממוצע) mode
-    trend_map = {}
-    if chart_type == "bar":
-        try:
-            df_all = load_polls(outlets or None)
-            df_all["date"] = pd.to_datetime(df_all["date"])
-            df_ranged = apply_date_range(df_all, date_range)
-            if not df_ranged.empty and len(df_ranged) >= 2:
-                df_ranged = df_ranged.sort_values("date")
-                mid = df_ranged["date"].iloc[len(df_ranged) // 2]
-                first_half = df_ranged[df_ranged["date"] <= mid]
-                second_half = df_ranged[df_ranged["date"] > mid]
-                for key in PARTY_HE:
-                    if key in df_ranged.columns:
-                        v1 = first_half[key].dropna().mean()
-                        v2 = second_half[key].dropna().mean()
-                        if pd.notna(v1) and pd.notna(v2) and v1 > 0:
-                            trend_map[key] = round(((v2 - v1) / v1) * 100, 1)
-        except Exception:
-            pass
-
     pills = []
     for key, name in PARTY_HE.items():
         color = PARTY_COLORS.get(key, "#888")
         active = key in sel_parties
-
-        label_parts = [html.Span(name)]
-        if chart_type == "bar" and key in trend_map:
-            pct = trend_map[key]
-            arrow = "▲" if pct > 0 else "▼"
-            arrow_color = "#2E7D32" if pct > 0 else "#D93025"
-            label_parts.append(html.Span(
-                [html.Span(arrow, style={"color": arrow_color, "fontSize": "0.65rem"}),
-                 html.Span(f" {abs(pct)}%", style={"color": "#555"})],
-                style={"display": "block", "fontSize": "0.62rem",
-                       "fontWeight": "400", "marginTop": "2px", "lineHeight": "1"},
-            ))
-
         pills.append(html.Button(
-            label_parts,
+            name,
             id={"type": "party-pill", "party": key},
             className=f"p-pill {'active' if active else ''}",
             n_clicks=0,
@@ -1085,7 +1049,6 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, date_rang
                 "color": "white" if active else color,
                 "backgroundColor": color if active else "transparent",
                 "borderColor": color,
-                "paddingBlock": "4px" if chart_type == "bar" and key in trend_map else "",
             },
         ))
     return pills
@@ -1196,6 +1159,8 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
         fig = build_trend(df_ranged, events_df, parties or [], show_markers) if chart_type == "trend" \
             else build_bar(df_ranged, parties or [])
     return fig, status
+
+
 
 
 def _merge_beyahad(df):
@@ -1327,6 +1292,25 @@ def build_bar_blocs(df, selected_blocs):
     return fig
 
 
+def _calc_trends(df, parties):
+    """Returns dict {party: trend_pct} based on first-half vs second-half of df."""
+    trends = {}
+    if df.empty or len(df) < 4:
+        return trends
+    df_s = df.sort_values("date")
+    mid = len(df_s) // 2
+    first  = df_s.iloc[:mid]
+    second = df_s.iloc[mid:]
+    for p in parties:
+        if p not in df_s.columns:
+            continue
+        v1 = first[p].dropna().mean()
+        v2 = second[p].dropna().mean()
+        if pd.notna(v1) and pd.notna(v2) and v1 > 0:
+            trends[p] = round(((v2 - v1) / v1) * 100, 1)
+    return trends
+
+
 def build_bar(df, parties):
     averages = {
         p: df[p].mean()
@@ -1334,17 +1318,40 @@ def build_bar(df, parties):
         if p in df.columns and df[p].notna().any()
     }
     averages = dict(sorted(averages.items(), key=lambda x: -x[1]))
+    trends = _calc_trends(df, list(averages.keys()))
+
+    x_labels, customdata, hover_texts = [], [], []
+    for p in averages:
+        name = PARTY_HE.get(p, p)
+        t = trends.get(p)
+        if t is not None:
+            arrow = "▲" if t > 0 else "▼"
+            trend_str = f"{arrow}{abs(t)}%"
+            x_labels.append(f"{name}<br><span style='font-size:9px'>{trend_str}</span>")
+            customdata.append(trend_str)
+            hover_texts.append(f"<b>{name}</b><br>%{{y:.1f}} מנדטים<br>"
+                               f"<span style='font-size:11px'>מגמה: {trend_str}</span>")
+        else:
+            x_labels.append(name)
+            customdata.append("")
+            hover_texts.append(f"<b>{name}</b><br>%{{y:.1f}} מנדטים")
+
     fig = go.Figure(go.Bar(
-        x=[PARTY_HE.get(p, p) for p in averages],
+        x=x_labels,
         y=list(averages.values()),
         marker_color=[PARTY_COLORS.get(p, "#888") for p in averages],
         marker_opacity=0.85,
         text=[f"{v:.1f}" for v in averages.values()],
         textposition="outside",
-        hovertemplate="<b>%{x}</b><br><b>%{y:.1f} מנדטים</b><extra></extra>",
+        customdata=customdata,
+        hovertemplate=[ht + "<extra></extra>" for ht in hover_texts],
     ))
     _style_fig(fig)
-    fig.update_layout(yaxis_title="מנדטים (ממוצע)", bargap=0.35)
+    fig.update_layout(
+        yaxis_title="מנדטים (ממוצע)",
+        bargap=0.35,
+        margin=dict(l=40, r=20, t=48, b=60),
+    )
     return fig
 
 

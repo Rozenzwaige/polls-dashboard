@@ -1,62 +1,52 @@
-/* Reset all trace opacities when mouse leaves the chart area */
+/* Reset trace opacities when mouse leaves the Plotly chart.
+   Dash wraps Plotly in an outer div (#main-chart).
+   The actual Plotly plot lives in the inner .js-plotly-plot div.
+*/
 (function () {
-    var NORMAL_OPACITY = 1.0;
-    var NORMAL_WIDTH   = 2.5;
+    function getPlotlyDiv() {
+        var outer = document.getElementById('main-chart');
+        if (!outer) return null;
+        // In Dash 2+/4+, the Plotly plot is the first child with _fullData
+        var inner = outer.querySelector('.js-plotly-plot');
+        return (inner && inner._fullData) ? inner : (outer._fullData ? outer : null);
+    }
 
-    function resetChart(div) {
+    function resetOpacity() {
+        var div = getPlotlyDiv();
         if (!div || !div.data || div.data.length === 0) return;
         var n = div.data.length;
-        var opacities  = Array(n).fill(NORMAL_OPACITY);
-        var lineWidths = Array(n).fill(NORMAL_WIDTH);
-        Plotly.restyle(div, { opacity: opacities, 'line.width': lineWidths });
+        Plotly.restyle(div,
+            { opacity: Array(n).fill(1.0), 'line.width': Array(n).fill(2.5) }
+        );
     }
 
-    function attach(div) {
-        if (!div || div._unhoverBound) return;
-        div._unhoverBound = true;
+    function attachUnhover() {
+        var div = getPlotlyDiv();
+        if (!div) { setTimeout(attachUnhover, 400); return; }
+        if (div._rozaUnhoverAttached) return;
+        div._rozaUnhoverAttached = true;
 
-        /* Plotly event — fires when cursor leaves a trace */
-        div.on('plotly_unhover', function () { resetChart(div); });
+        div.on('plotly_unhover', resetOpacity);
 
-        /* Fallback: DOM mouseleave on the SVG layer */
-        var svg = div.querySelector('.nsewdrag, .js-plotly-plot');
-        if (svg) {
-            svg.addEventListener('mouseleave', function () { resetChart(div); });
+        /* Backup: mouseleave on the nsewdrag SVG rect (the interactive layer) */
+        var drag = div.querySelector('.nsewdrag');
+        if (drag) {
+            drag.addEventListener('mouseleave', resetOpacity);
         }
     }
 
-    function tryAttach() {
-        var div = document.getElementById('main-chart');
-        if (div && typeof Plotly !== 'undefined' && div.data) {
-            attach(div);
-        } else {
-            setTimeout(tryAttach, 300);
-        }
-    }
-
-    /* Re-attach after every Dash re-render (Dash replaces inner DOM) */
-    function watchForRerender() {
+    function watchForRender() {
         var wrapper = document.querySelector('.chart-wrapper');
-        if (!wrapper) { setTimeout(watchForRerender, 500); return; }
-
-        var observer = new MutationObserver(function () {
-            var div = document.getElementById('main-chart');
-            if (div) { div._unhoverBound = false; tryAttach(); }
+        if (!wrapper) { setTimeout(watchForRender, 600); return; }
+        var mo = new MutationObserver(function () {
+            var div = getPlotlyDiv();
+            if (div) { div._rozaUnhoverAttached = false; attachUnhover(); }
         });
-        observer.observe(wrapper, { childList: true, subtree: true });
+        mo.observe(wrapper, { childList: true, subtree: true });
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        tryAttach();
-        watchForRerender();
-
-        /* Hard fallback: mouseleave on the chart container div */
-        document.addEventListener('mouseleave', function (e) {
-            var div = document.getElementById('main-chart');
-            if (!div) return;
-            if (!div.contains(e.relatedTarget)) {
-                resetChart(div);
-            }
-        }, true);
+        attachUnhover();
+        watchForRender();
     });
 })();
