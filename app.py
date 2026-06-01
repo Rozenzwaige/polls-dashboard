@@ -759,7 +759,9 @@ def public_layout():
                                         className="ct-btn", n_clicks=0),
                         ], className="ct-overlay-right"),
                         dcc.Graph(id="main-chart",
-                                  config={"displayModeBar": False},
+                                  config={"displayModeBar": False,
+                                          "scrollZoom": False,
+                                          "doubleClick": False},
                                   style={"height": "490px"}),
                     ], className="chart-wrapper"),
 
@@ -971,11 +973,17 @@ def toggle_view_mode(_, __):
     State("selected-blocs", "data"),
     prevent_initial_call=True,
 )
-def toggle_bloc(_, selected):
+def toggle_bloc(n_clicks_list, selected):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
-    bloc_name = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["bloc"]
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        bloc_name = json.loads(real[0]["prop_id"].split(".")[0])["bloc"]
+    except Exception:
+        return no_update
     selected = list(selected or [])
     if bloc_name in selected:
         selected.remove(bloc_name)
@@ -1039,8 +1047,8 @@ def toggle_outlet(_, selected):
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
     Input("chart-type", "data"),
-    Input("shown-parties", "data"),
-    Input("shown-blocs",   "data"),
+    State("shown-parties", "data"),
+    State("shown-blocs",   "data"),
 )
 def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_parties, shown_blocs):
     shown_parties = set(shown_parties or [])
@@ -1232,15 +1240,37 @@ def _merge_beyahad(df):
 
 
 def _add_event_vlines(fig, events_df):
-    for _, ev in events_df.iterrows():
+    if events_df.empty:
+        return
+    # Sort by date and stagger labels vertically to avoid overlap
+    df = events_df.copy()
+    df["_dt"] = pd.to_datetime(df["date"])
+    df = df.sort_values("_dt").reset_index(drop=True)
+
+    Y_LEVELS = [1.0, 0.88, 0.76, 0.64]   # stagger up to 4 levels
+    date_level = {}   # track last used level per "slot"
+
+    for i, ev in df.iterrows():
         color = EVENT_COLORS.get(ev.get("category", "אחר"), "#666")
-        ev_date = pd.to_datetime(ev["date"])
+        ev_date = ev["_dt"]
+
+        # Find which level is free (not recently used for a close date)
+        level_idx = i % len(Y_LEVELS)
+        y_pos = Y_LEVELS[level_idx]
+
         fig.add_shape(type="line", x0=ev_date, x1=ev_date, y0=0, y1=1,
                       yref="paper", line=dict(color=color, width=1.5, dash="dash"))
-        fig.add_annotation(x=ev_date, y=1, yref="paper", text=ev["title"],
-                           showarrow=False, xanchor="left", yanchor="top",
-                           font=dict(size=9, color=color, family="Heebo, Arial"),
-                           bgcolor="rgba(255,255,255,0.75)", borderpad=2)
+        fig.add_annotation(
+            x=ev_date, y=y_pos, yref="paper",
+            text=ev["title"],
+            showarrow=False, xanchor="left", yanchor="top",
+            font=dict(size=9, color="#fff", family="Heebo, Arial"),
+            bgcolor=color,
+            borderpad=3,
+            bordercolor=color,
+            borderwidth=1,
+            opacity=0.9,
+        )
 
 
 def _empty_chart(msg="טוען נתונים..."):
@@ -1470,6 +1500,7 @@ def _style_fig(fig):
                     itemclick=False, itemdoubleclick=False),
         margin=dict(l=40, r=20, t=48, b=32),
         hovermode="closest",
+        dragmode=False,
         hoverdistance=40,
         hoverlabel=dict(bgcolor="#3D1040", font_color="#CCDD00",
                         font_family="Heebo, Arial", namelength=-1),
