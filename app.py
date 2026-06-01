@@ -19,6 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from scraper import DB_PATH, init_db, run_scrape
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "rozamedia2026")
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "Rosa2026!!")
 _DATA = os.environ.get("DATA_DIR", ".")
 EVENTS_DB_PATH = f"{_DATA}/events.db"   # separate from polls.db — never deleted on schema reset
 
@@ -795,16 +796,102 @@ def admin_layout():
 
 app.layout = html.Div([
     dcc.Location(id="url"),
+    dcc.Store(id="site-auth-store", data={"authenticated": False}),
     html.Div(id="page-content"),
 ])
 
 
-# ── Routing ───────────────────────────────────────────────────────────────────
-@app.callback(Output("page-content", "children"), Input("url", "pathname"))
-def render_page(pathname):
+# ── Routing & Auth ────────────────────────────────────────────────────────────
+@app.callback(
+    Output("page-content", "children"),
+    Input("url", "pathname"),
+    State("site-auth-store", "data"),
+)
+def render_page(pathname, auth_data):
+    is_auth = auth_data.get("authenticated", False) if auth_data else False
     if pathname == "/admin":
         return admin_layout()
+    if not is_auth:
+        return login_modal()
     return public_layout()
+
+
+def login_modal():
+    """Full-screen login modal"""
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.Img(src="/assets/rose.png", style={"height": "48px", "marginBottom": "16px"}),
+                html.H1("רוזה ניוז — בחירות 2026", style={"fontSize": "1.25rem", "fontWeight": "900", "color": "#3D1040", "marginBottom": "6px"}),
+                html.P("אנא הזן את הסיסמה כדי להמשיך", style={"color": "#888", "marginBottom": "28px"}),
+                dcc.Input(
+                    id="site-password-input",
+                    type="password",
+                    placeholder="סיסמה",
+                    style={
+                        "width": "100%",
+                        "padding": "10px 14px",
+                        "border": "1.5px solid #E0D8E8",
+                        "borderRadius": "4px",
+                        "direction": "ltr",
+                        "textAlign": "center",
+                        "fontSize": "0.95rem",
+                        "marginBottom": "14px",
+                        "boxSizing": "border-box",
+                    },
+                    autoFocus=True,
+                ),
+                html.Button(
+                    "כניסה",
+                    id="site-login-btn",
+                    n_clicks=0,
+                    style={
+                        "width": "100%",
+                        "padding": "11px",
+                        "background": "#D93025",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "4px",
+                        "fontSize": "1rem",
+                        "fontWeight": "700",
+                        "cursor": "pointer",
+                    },
+                ),
+                html.Div(
+                    id="site-login-error",
+                    style={"color": "#D93025", "fontSize": "0.82rem", "marginTop": "10px"},
+                ),
+            ], style={
+                "background": "white",
+                "borderRadius": "8px",
+                "padding": "40px 48px",
+                "width": "360px",
+                "textAlign": "center",
+                "boxShadow": "0 4px 32px rgba(61,16,64,.12)",
+            }),
+        ], style={
+            "display": "flex",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "minHeight": "100vh",
+            "background": "#E8D5F5",
+            "direction": "rtl",
+        }),
+    ], style={"fontFamily": "'Heebo', Arial, sans-serif"})
+
+
+@app.callback(
+    Output("site-auth-store", "data"),
+    Output("site-login-error", "children"),
+    Input("site-login-btn", "n_clicks"),
+    State("site-password-input", "value"),
+    State("site-auth-store", "data"),
+    prevent_initial_call=True,
+)
+def site_login(n_clicks, password, auth_data):
+    if password == SITE_PASSWORD:
+        return {"authenticated": True}, ""
+    return {"authenticated": False}, "סיסמה שגויה — נסה שוב"
 
 
 # ── Chart type toggle ──────────────────────────────────────────────────────────
