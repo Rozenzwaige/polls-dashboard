@@ -1339,8 +1339,6 @@ def _style_fig(fig):
 )
 def render_events_box(_, selected_ids):
     events_df = load_events()
-    if events_df.empty:
-        return html.Div()
     sel = set(selected_ids or [])
     pills = []
     for _, ev in events_df.iterrows():
@@ -1359,9 +1357,13 @@ def render_events_box(_, selected_ids):
             style=style,
             n_clicks=0,
         ))
+    content = pills if pills else [
+        html.Span("אין אירועים — הוסף דרך /admin",
+                  style={"fontSize": "0.72rem", "color": "#bbb", "fontStyle": "italic"})
+    ]
     return html.Div([
         html.Div("אירועים חדשותיים", className="events-box-title"),
-        html.Div(pills, className="events-pills-wrap"),
+        html.Div(content, className="events-pills-wrap"),
     ], className="events-box")
 
 
