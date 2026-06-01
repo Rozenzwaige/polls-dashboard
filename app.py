@@ -1292,6 +1292,13 @@ def _empty_chart(msg="טוען נתונים..."):
     return fig
 
 
+def _smooth(series, n_points):
+    """Gaussian-weighted rolling average. Window scales with data density."""
+    window = max(3, min(n_points // 6, 20))
+    return series.rolling(window=window, center=True, min_periods=1,
+                          win_type="gaussian").mean(std=window / 3)
+
+
 def build_trend(df, events_df, parties, show_markers=True):
     if not parties:
         return _empty_chart("בחר מפלגות להצגה")
@@ -1305,7 +1312,6 @@ def build_trend(df, events_df, parties, show_markers=True):
             continue
         actual_col = col if col in df.columns else party
 
-        # Group by date: mean mandates + collect outlet names
         grp = (df.sort_values("date")
                .groupby("date")
                .agg({actual_col: "mean",
@@ -1315,16 +1321,21 @@ def build_trend(df, events_df, parties, show_markers=True):
                .reset_index())
         if grp.empty:
             continue
+
         color = PARTY_COLORS.get(party, "#888")
         label = PARTY_HE.get(party, party)
+        n = len(grp)
+        smoothed = _smooth(grp["mandates"], n)
+
+        # ── Scatter dots: individual polls ──────────────────────────────
+        dot_size = 5 if n > 60 else 7
         fig.add_trace(go.Scatter(
-            x=grp["date"],
-            y=grp["mandates"],
+            x=grp["date"], y=grp["mandates"],
             name=label,
-            mode="lines+markers" if show_markers else "lines",
-            line=dict(color=color, width=2.5, shape="spline", smoothing=0.4),
-            marker=dict(size=7, opacity=0.9, color=color, line=dict(width=0)),
+            mode="markers",
+            marker=dict(size=dot_size, opacity=0.55, color=color, line=dict(width=0)),
             opacity=1.0,
+            legendgroup=party,
             customdata=grp[["media_outlet"]].values,
             hovertemplate=(
                 f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
@@ -1332,6 +1343,18 @@ def build_trend(df, events_df, parties, show_markers=True):
                 "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
                 "<extra></extra>"
             ),
+        ))
+
+        # ── Smooth trend line ────────────────────────────────────────────
+        fig.add_trace(go.Scatter(
+            x=grp["date"], y=smoothed,
+            name=label,
+            mode="lines",
+            line=dict(color=color, width=2.5),
+            opacity=1.0,
+            legendgroup=party,
+            showlegend=False,
+            hoverinfo="skip",
         ))
 
     _add_event_vlines(fig, events_df)
@@ -1359,13 +1382,17 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
                .reset_index())
         if grp.empty:
             continue
+        n = len(grp)
+        smoothed = _smooth(grp["_bt"], n)
+        dot_size = 5 if n > 60 else 7
+        # Dots
         fig.add_trace(go.Scatter(
             x=grp["date"], y=grp["_bt"],
             name=bloc["name"],
-            mode="lines+markers" if show_markers else "lines",
-            line=dict(color=bloc["color"], width=2.5, shape="spline", smoothing=0.4),
-            marker=dict(size=7, opacity=0.9, color=bloc["color"], line=dict(width=0)),
+            mode="markers",
+            marker=dict(size=dot_size, opacity=0.5, color=bloc["color"], line=dict(width=0)),
             opacity=1.0,
+            legendgroup=bloc["name"],
             customdata=grp[["media_outlet"]].values,
             hovertemplate=(
                 f"<b>{bloc['name']}</b>  %{{y:.1f}} מנדטים<br>"
@@ -1373,6 +1400,17 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
                 "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
                 "<extra></extra>"
             ),
+        ))
+        # Smooth line
+        fig.add_trace(go.Scatter(
+            x=grp["date"], y=smoothed,
+            name=bloc["name"],
+            mode="lines",
+            line=dict(color=bloc["color"], width=2.5),
+            opacity=1.0,
+            legendgroup=bloc["name"],
+            showlegend=False,
+            hoverinfo="skip",
         ))
     _add_event_vlines(fig, events_df)
     _style_fig(fig)
