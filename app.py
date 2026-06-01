@@ -1369,14 +1369,21 @@ def _style_fig(fig):
 
 # ── Events box ────────────────────────────────────────────────────────────────
 @app.callback(
+    Output("events-box-container", "style"),
+    Input("chart-type", "data"),
+)
+def toggle_events_visibility(chart_type):
+    if chart_type == "bar":
+        return {"display": "none"}
+    return {"display": "block"}
+
+
+@app.callback(
     Output("events-box-container", "children"),
     Input("interval", "n_intervals"),
     Input("selected-events", "data"),
-    Input("chart-type", "data"),
 )
-def render_events_box(_, selected_ids, chart_type):
-    if chart_type == "bar":
-        return html.Div()
+def render_events_box(_, selected_ids):
     events_df = load_events()
     sel = set(selected_ids or [])
     pills = []
