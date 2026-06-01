@@ -33,10 +33,12 @@ BLOCS = [
     {"name": "ימין קיצוני",      "parties": ["zionut_datit", "otzma_yehudit"],                                        "color": "#7F1D1D"},
 ]
 
-DEFAULT_PARTIES = [
-    "likud", "yesh_atid", "zionut_datit", "shas",
-    "yahadut_tora", "israel_beiteinu", "demokratim", "beyahad",
-]
+DEFAULT_PARTIES = list({
+    "likud", "yahadut_tora", "shas", "kahol_lavan", "yesh_atid",
+    "hadash_taal", "israel_beiteinu", "demokratim", "zionut_datit",
+    "raam", "balad", "otzma_yehudit", "beyahad", "yashar",
+    "miluimnikim", "reshima_meshutefet",
+})
 
 PARTY_HE = {
     "likud":              "הליכוד",
@@ -531,6 +533,15 @@ app.index_string = """<!DOCTYPE html>
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.2; }
   }
+  @keyframes pill-flash {
+    0%   { transform: scale(1);    box-shadow: 0 0 0 0px rgba(255,255,255,0.8); }
+    30%  { transform: scale(1.18); box-shadow: 0 0 0 8px rgba(255,255,255,0); }
+    60%  { transform: scale(0.96); }
+    100% { transform: scale(1);    box-shadow: none; }
+  }
+  .pill-flash-anim {
+    animation: pill-flash 0.45s ease-out;
+  }
   .feed-body {
     flex: 1;
     overflow-y: auto;
@@ -656,7 +667,7 @@ def public_layout():
         dcc.Store(id="selected-parties", data=DEFAULT_PARTIES),
         dcc.Store(id="selected-outlets", data=[]),
         dcc.Store(id="selected-events", data=[]),
-        dcc.Store(id="date-range", data="all"),
+        dcc.Store(id="date-range", data="3month"),
         dcc.Store(id="view-mode", data="parties"),
         dcc.Store(id="selected-blocs", data=[b["name"] for b in BLOCS]),
 
@@ -703,10 +714,10 @@ def public_layout():
                         html.Span("תקופה:", className="dr-label"),
                         html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
                         html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
-                        html.Button("3 חודשים", id="dr-3month", className="dr-btn",        n_clicks=0),
+                        html.Button("3 חודשים", id="dr-3month", className="dr-btn active", n_clicks=0),
                         html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
                         html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
-                        html.Button("הכל",      id="dr-all",    className="dr-btn active", n_clicks=0),
+                        html.Button("הכל",      id="dr-all",    className="dr-btn",        n_clicks=0),
                     ], className="date-range-strip"),
 
                     html.Div([
@@ -1208,7 +1219,7 @@ def build_trend(df, events_df, parties, show_markers=True):
             y=grp["mandates"],
             name=label,
             mode="lines+markers" if show_markers else "lines",
-            line=dict(color=color, width=2.5, shape="spline", smoothing=0.85),
+            line=dict(color=color, width=2.5, shape="spline", smoothing=0.4),
             marker=dict(size=7, opacity=0.9, color=color, line=dict(width=0)),
             opacity=1.0,
             customdata=grp[["media_outlet"]].values,
@@ -1249,7 +1260,7 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
             x=grp["date"], y=grp["_bt"],
             name=bloc["name"],
             mode="lines+markers" if show_markers else "lines",
-            line=dict(color=bloc["color"], width=2.5, shape="spline", smoothing=0.85),
+            line=dict(color=bloc["color"], width=2.5, shape="spline", smoothing=0.4),
             marker=dict(size=7, opacity=0.9, color=bloc["color"], line=dict(width=0)),
             opacity=1.0,
             customdata=grp[["media_outlet"]].values,
@@ -1389,9 +1400,16 @@ def toggle_events_visibility(chart_type):
     Output("events-box-container", "children"),
     Input("interval", "n_intervals"),
     Input("selected-events", "data"),
+    Input("date-range", "data"),
 )
-def render_events_box(_, selected_ids):
+def render_events_box(_, selected_ids, date_range):
     events_df = load_events()
+    # Filter events to current period
+    if not events_df.empty and date_range and date_range != "all":
+        import datetime as _dt
+        days = DR_DAYS.get(date_range, 99999)
+        cutoff = (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+        events_df = events_df[events_df["date"] >= cutoff]
     sel = set(selected_ids or [])
     pills = []
     for _, ev in events_df.iterrows():
