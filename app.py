@@ -692,6 +692,7 @@ def public_layout():
         dcc.Store(id="selected-blocs", data=[b["name"] for b in BLOCS]),
         dcc.Store(id="shown-parties", data=DEFAULT_PARTIES),
         dcc.Store(id="shown-blocs",   data=[b["name"] for b in BLOCS]),
+        dcc.Store(id="shown-events",  data=[]),
 
         html.Header([
             html.Img(src="/assets/rose.png", className="header-rose"),
@@ -1100,11 +1101,18 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_par
     State("selected-parties", "data"),
     prevent_initial_call=True,
 )
-def toggle_party(_, selected):
+def toggle_party(n_clicks_list, selected):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
-    party = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["party"]
+    # Only act on genuine clicks (n_clicks > 0), ignore re-render resets
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        party = json.loads(real[0]["prop_id"].split(".")[0])["party"]
+    except Exception:
+        return no_update
     selected = list(selected or [])
     if party in selected:
         selected.remove(party)
@@ -1156,6 +1164,7 @@ def apply_date_range(df, date_range):
     Output("header-status", "children"),
     Output("shown-parties", "data"),
     Output("shown-blocs",   "data"),
+    Output("shown-events",  "data"),
     Input("interval", "n_intervals"),
     Input("selected-outlets", "data"),
     Input("chart-type", "data"),
@@ -1178,7 +1187,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             annotations=[dict(text="טוען נתונים...", showarrow=False, font_size=18)],
             paper_bgcolor="#fff", plot_bgcolor="#fff",
         )
-        return fig, "", [], []
+        return fig, "", [], [], []
 
     status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
     df_ranged = apply_date_range(df, date_range)
@@ -1204,14 +1213,15 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             p in df_ranged.columns and df_ranged[p].notna().any()
             for p in next((x["parties"] for x in BLOCS if x["name"] == b), [])
         )]
-        return fig, status, parties, shown_blocs
+        shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
+        return fig, status, parties, shown_blocs, shown_ev
     else:
         fig = build_trend(df_ranged, events_df, parties, show_markers) if chart_type == "trend" \
             else build_bar(df_ranged, parties)
-        # parties actually shown = those with data in range
         shown = [p for p in parties
                  if p in df_ranged.columns and df_ranged[p].notna().any()]
-        return fig, status, shown, sel_blocs
+        shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
+        return fig, status, shown, sel_blocs, shown_ev
 
 
 
@@ -1456,7 +1466,8 @@ def _style_fig(fig):
         plot_bgcolor="#FFFFFF",
         font=dict(family="Heebo, Arial", color="#1A1A1A", size=12),
         legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center",
-                    font_size=11, bgcolor="rgba(0,0,0,0)"),
+                    font_size=11, bgcolor="rgba(0,0,0,0)",
+                    itemclick=False, itemdoubleclick=False),
         margin=dict(l=40, r=20, t=48, b=32),
         hovermode="closest",
         hoverdistance=40,
@@ -1485,8 +1496,9 @@ def toggle_events_visibility(chart_type):
     Input("interval", "n_intervals"),
     Input("selected-events", "data"),
     Input("date-range", "data"),
+    Input("shown-events", "data"),
 )
-def render_events_box(_, selected_ids, date_range):
+def render_events_box(_, selected_ids, date_range, shown_events):
     events_df = load_events()
     # Filter events to current period
     if not events_df.empty and date_range and date_range != "all":
@@ -1494,7 +1506,8 @@ def render_events_box(_, selected_ids, date_range):
         days = DR_DAYS.get(date_range, 99999)
         cutoff = (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
         events_df = events_df[events_df["date"] >= cutoff]
-    sel = set(selected_ids or [])
+    # active = shown in chart (in range AND selected)
+    sel = set(shown_events or [])
     pills = []
     for _, ev in events_df.iterrows():
         eid = int(ev["id"])
@@ -1530,11 +1543,17 @@ def render_events_box(_, selected_ids, date_range):
     State("selected-events", "data"),
     prevent_initial_call=True,
 )
-def toggle_event(_, selected):
+def toggle_event(n_clicks_list, selected):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
-    eid = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["eid"]
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        eid = json.loads(real[0]["prop_id"].split(".")[0])["eid"]
+    except Exception:
+        return no_update
     selected = list(selected or [])
     if eid in selected:
         selected.remove(eid)
