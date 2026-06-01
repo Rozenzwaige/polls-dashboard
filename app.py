@@ -539,8 +539,28 @@ app.index_string = """<!DOCTYPE html>
     60%  { transform: scale(0.96); }
     100% { transform: scale(1);    box-shadow: none; }
   }
-  .pill-flash-anim {
-    animation: pill-flash 0.45s ease-out;
+  .pill-flash-anim { animation: pill-flash 0.45s ease-out; }
+
+  /* ── Event pill tooltip ── */
+  .ev-pill { position: relative; }
+  .ev-pill[data-desc]:hover::after {
+    content: attr(data-desc);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 50%;
+    transform: translateX(50%);
+    background: #3D1040;
+    color: #fff;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    padding: 5px 10px;
+    border-radius: 5px;
+    white-space: normal;
+    width: max-content;
+    max-width: 220px;
+    z-index: 200;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    pointer-events: none;
   }
   .feed-body {
     flex: 1;
@@ -1191,7 +1211,22 @@ def _add_event_vlines(fig, events_df):
                            bgcolor="rgba(255,255,255,0.75)", borderpad=2)
 
 
+def _empty_chart(msg="טוען נתונים..."):
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor="#fff", plot_bgcolor="#fff",
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        annotations=[dict(text=msg, showarrow=False,
+                          font=dict(size=16, color="#aaa", family="Heebo,Arial"),
+                          xref="paper", yref="paper", x=0.5, y=0.5)],
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    return fig
+
+
 def build_trend(df, events_df, parties, show_markers=True):
+    if not parties:
+        return _empty_chart("בחר מפלגות להצגה")
     fig = go.Figure()
     df = _merge_beyahad(df)
     df["date"] = pd.to_datetime(df["date"])
@@ -1280,6 +1315,7 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
 def build_bar_blocs(df, selected_blocs):
     df = _merge_beyahad(df)
     blocs_data = {}
+    blocs_cols = {}
     for bloc in BLOCS:
         if bloc["name"] not in selected_blocs:
             continue
@@ -1287,19 +1323,45 @@ def build_bar_blocs(df, selected_blocs):
         if not cols:
             continue
         blocs_data[bloc["name"]] = df[cols].sum(axis=1, min_count=1).mean()
+        blocs_cols[bloc["name"]] = cols
     blocs_data = dict(sorted(blocs_data.items(), key=lambda x: -x[1]))
     color_map = {b["name"]: b["color"] for b in BLOCS}
+
+    # Trend per bloc
+    x_labels, hover_texts = [], []
+    for bname in blocs_data:
+        cols = blocs_cols.get(bname, [])
+        # use a merged column for trend calc
+        if df.empty or len(df) < 4:
+            t = None
+        else:
+            df_s = df.sort_values("date")
+            mid = len(df_s) // 2
+            v1 = df_s.iloc[:mid][cols].sum(axis=1).mean()
+            v2 = df_s.iloc[mid:][cols].sum(axis=1).mean()
+            t = round(((v2 - v1) / v1) * 100, 1) if pd.notna(v1) and pd.notna(v2) and v1 > 0 else None
+
+        if t is not None:
+            arrow = "▲" if t > 0 else "▼"
+            trend_str = f"{arrow}{abs(t)}%"
+            x_labels.append(f"{bname}<br><span style='font-size:9px'>{trend_str}</span>")
+            hover_texts.append(f"<b>{bname}</b><br>%{{y:.1f}} מנדטים<br>מגמה: {trend_str}<extra></extra>")
+        else:
+            x_labels.append(bname)
+            hover_texts.append(f"<b>{bname}</b><br>%{{y:.1f}} מנדטים<extra></extra>")
+
     fig = go.Figure(go.Bar(
-        x=list(blocs_data.keys()),
+        x=x_labels,
         y=list(blocs_data.values()),
         marker_color=[color_map.get(n, "#888") for n in blocs_data],
         marker_opacity=0.85,
         text=[f"{v:.1f}" for v in blocs_data.values()],
         textposition="outside",
-        hovertemplate="<b>%{x}</b><br><b>%{y:.1f} מנדטים</b><extra></extra>",
+        hovertemplate=hover_texts,
     ))
     _style_fig(fig)
-    fig.update_layout(yaxis_title="מנדטים (ממוצע גושים)", bargap=0.35)
+    fig.update_layout(yaxis_title="מנדטים (ממוצע גושים)", bargap=0.35,
+                      margin=dict(l=40, r=20, t=48, b=60))
     return fig
 
 
@@ -1421,15 +1483,17 @@ def render_events_box(_, selected_ids, date_range):
             "color": "white" if active else color,
             "backgroundColor": color if active else "transparent",
         }
+        desc = str(ev.get("description", "") or "")
         pills.append(html.Button(
             ev["title"],
             id={"type": "ev-pill", "eid": eid},
             className=f"ev-pill {'active' if active else ''}",
             style=style,
             n_clicks=0,
+            **{"data-desc": desc} if desc else {},
         ))
     content = pills if pills else [
-        html.Span("אין אירועים — הוסף דרך /admin",
+        html.Span("לא קיימים אירועים חדשותיים בתקופה הנבחרת",
                   style={"fontSize": "0.72rem", "color": "#bbb", "fontStyle": "italic"})
     ]
     return html.Div([
