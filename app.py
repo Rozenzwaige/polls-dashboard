@@ -1068,7 +1068,7 @@ def toggle_outlet(_, selected):
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
     Input("chart-type", "data"),
-    Input("shown-parties", "data"),
+    State("shown-parties", "data"),
     State("shown-blocs",   "data"),
 )
 def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_parties, shown_blocs):
@@ -1224,6 +1224,7 @@ def apply_date_range(df, date_range):
     Output("shown-parties", "data"),
     Output("shown-blocs",   "data"),
     Output("shown-events",  "data"),
+    Output("selected-parties", "data", allow_duplicate=True),
     Input("interval", "n_intervals"),
     Input("selected-outlets", "data"),
     Input("chart-type", "data"),
@@ -1246,7 +1247,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             annotations=[dict(text="טוען נתונים...", showarrow=False, font_size=18)],
             paper_bgcolor="#fff", plot_bgcolor="#fff",
         )
-        return fig, "", [], [], []
+        return fig, "", [], [], [], no_update
 
     status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
     df_ranged = apply_date_range(df, date_range)
@@ -1273,14 +1274,16 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             for p in next((x["parties"] for x in BLOCS if x["name"] == b), [])
         )]
         shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
-        return fig, status, parties, shown_blocs, shown_ev
+        return fig, status, parties, shown_blocs, shown_ev, no_update
     else:
         fig = build_trend(df_ranged, events_df, parties, show_markers) if chart_type == "trend" \
             else build_bar(df_ranged, parties)
         shown = [p for p in parties
                  if p in df_ranged.columns and df_ranged[p].notna().any()]
         shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
-        return fig, status, shown, sel_blocs, shown_ev
+        # Sync selected-parties to only those with data (fixes button/chart mismatch)
+        new_sel = shown if shown != parties else no_update
+        return fig, status, shown, sel_blocs, shown_ev, new_sel
 
 
 
@@ -1381,6 +1384,8 @@ def build_trend(df, events_df, parties, show_markers=True):
         smoothed = _smooth(grp["mandates"], n)
 
         # ── Smooth trend line only ───────────────────────────────────────
+        # Store actual daily mean alongside outlet for tooltip
+        cd = list(zip(grp["media_outlet"].tolist(), grp["mandates"].tolist()))
         fig.add_trace(go.Scatter(
             x=grp["date"], y=smoothed,
             name=label,
@@ -1388,9 +1393,9 @@ def build_trend(df, events_df, parties, show_markers=True):
             line=dict(color=color, width=2.5),
             opacity=1.0,
             legendgroup=party,
-            customdata=grp[["media_outlet"]].values,
+            customdata=cd,
             hovertemplate=(
-                f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
+                f"<b>{label}</b>  %{{customdata[1]:.1f}} מנדטים<br>"
                 "%{x|%d/%m/%Y}<br>"
                 "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
                 "<extra></extra>"
@@ -1399,7 +1404,7 @@ def build_trend(df, events_df, parties, show_markers=True):
 
     _add_event_vlines(fig, events_df)
     _style_fig(fig)
-    fig.update_layout(yaxis_title="מנדטים")
+    fig.update_layout(yaxis_title="מנדטים (ממוצע משוקלל)")
     return fig
 
 
