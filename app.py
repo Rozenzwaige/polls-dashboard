@@ -1382,7 +1382,6 @@ def build_trend(df, events_df, parties, show_markers=True):
             line=dict(color=color, width=2.5),
             opacity=1.0,
             legendgroup=party,
-            **{"data-party": party},
             customdata=grp[["media_outlet"]].values,
             hovertemplate=(
                 f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
