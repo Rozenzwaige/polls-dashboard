@@ -746,33 +746,39 @@ def public_layout():
 
                 # MIDDLE: chart + party pills
                 dbc.Col([
-                    # Date range strip — TOP, above chart
+                    # ── Top controls bar (all in one row) ──
                     html.Div([
-                        html.Span("תקופה:", className="dr-label"),
-                        html.Button("שבוע",     id="dr-week",   className="dr-btn",        n_clicks=0),
-                        html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
-                        html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
-                        html.Button("3 חודשים", id="dr-3month", className="dr-btn active", n_clicks=0),
-                        html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
-                        html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
-                        html.Button("הכל",      id="dr-all",    className="dr-btn",        n_clicks=0),
-                    ], className="date-range-strip"),
-
-                    html.Div([
-                        # מגמות/ממוצע — top LEFT
+                        # Left: מגמות/ממוצע
                         html.Div([
                             html.Button("מגמות", id="btn-trend",
                                         className="ct-btn active", n_clicks=0),
                             html.Button("ממוצע", id="btn-bar",
                                         className="ct-btn", n_clicks=0),
-                        ], className="ct-overlay-left"),
-                        # מפלגות/גושים — top RIGHT
+                        ], style={"display":"flex","gap":"4px","marginLeft":"8px"}),
+
+                        # Center: period buttons
+                        html.Div([
+                            html.Span("תקופה:", className="dr-label"),
+                            html.Button("שבוע",     id="dr-week",   className="dr-btn",        n_clicks=0),
+                            html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
+                            html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
+                            html.Button("3 חודשים", id="dr-3month", className="dr-btn active", n_clicks=0),
+                            html.Button("חצי שנה",  id="dr-6month", className="dr-btn",        n_clicks=0),
+                            html.Button("שנה",      id="dr-year",   className="dr-btn",        n_clicks=0),
+                            html.Button("הכל",      id="dr-all",    className="dr-btn",        n_clicks=0),
+                        ], style={"display":"flex","gap":"4px","alignItems":"center","flex":"1","justifyContent":"center"}),
+
+                        # Right: מפלגות/גושים
                         html.Div([
                             html.Button("מפלגות", id="btn-parties",
                                         className="ct-btn active", n_clicks=0),
                             html.Button("גושים", id="btn-blocs",
                                         className="ct-btn", n_clicks=0),
-                        ], className="ct-overlay-right"),
+                        ], style={"display":"flex","gap":"4px","marginRight":"8px"}),
+                    ], className="date-range-strip",
+                       style={"justifyContent":"space-between"}),
+
+                    html.Div([
                         dcc.Graph(id="main-chart",
                                   config={"displayModeBar": False,
                                           "scrollZoom": False,
@@ -1308,14 +1314,14 @@ def _add_event_vlines(fig, events_df):
         # Label above the plot
         fig.add_annotation(
             x=ev_date, y=y_pos, yref="paper",
-            text=ev["title"],
+            text=f"<b>{ev['title']}</b>",
             showarrow=False, xanchor="center", yanchor="bottom",
-            font=dict(size=8.5, color=LABEL_FG, family="Heebo, Arial"),
+            font=dict(size=11, color=LABEL_FG, family="Heebo, Arial"),
             bgcolor=LABEL_BG,
-            borderpad=3,
+            borderpad=4,
             bordercolor=LABEL_BG,
             borderwidth=1,
-            opacity=0.95,
+            opacity=0.97,
         )
 
     # Extend top margin to fit labels
