@@ -749,6 +749,7 @@ def public_layout():
                     # Date range strip — TOP, above chart
                     html.Div([
                         html.Span("תקופה:", className="dr-label"),
+                        html.Button("שבוע",     id="dr-week",   className="dr-btn",        n_clicks=0),
                         html.Button("שבועיים",  id="dr-2weeks", className="dr-btn",        n_clicks=0),
                         html.Button("חודש",     id="dr-month",  className="dr-btn",        n_clicks=0),
                         html.Button("3 חודשים", id="dr-3month", className="dr-btn active", n_clicks=0),
@@ -1061,7 +1062,7 @@ def toggle_outlet(_, selected):
     Input("view-mode", "data"),
     Input("selected-blocs", "data"),
     Input("chart-type", "data"),
-    State("shown-parties", "data"),
+    Input("shown-parties", "data"),
     State("shown-blocs",   "data"),
 )
 def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_parties, shown_blocs):
@@ -1113,6 +1114,7 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_par
                 "backgroundColor": color if active else "transparent",
                 "borderColor": color,
             },
+            **{"data-party-key": key, "data-party-name": name},
         ))
     return pills
 
@@ -1150,16 +1152,17 @@ def toggle_party(n_clicks_list, selected):
 
 
 # ── Date range ────────────────────────────────────────────────────────────────
-DR_BTNS = ["dr-2weeks", "dr-month", "dr-3month", "dr-6month", "dr-year", "dr-all"]
-DR_VALS = {"dr-2weeks": "2weeks", "dr-month": "month", "dr-3month": "3month",
+DR_BTNS = ["dr-week", "dr-2weeks", "dr-month", "dr-3month", "dr-6month", "dr-year", "dr-all"]
+DR_VALS = {"dr-week": "week", "dr-2weeks": "2weeks", "dr-month": "month", "dr-3month": "3month",
            "dr-6month": "6month", "dr-year": "year", "dr-all": "all"}
-DR_DAYS = {"2weeks": 14, "month": 30, "3month": 90, "6month": 182, "year": 365, "all": 99999}
+DR_DAYS = {"week": 7, "2weeks": 14, "month": 30, "3month": 90, "6month": 182, "year": 365, "all": 99999}
 DR_LABELS = {"2weeks": "שבועיים", "month": "חודש אחרון", "3month": "3 חודשים",
              "6month": "חצי שנה", "year": "שנה", "all": "כל הסקרים"}
 
 
 @app.callback(
     Output("date-range",  "data"),
+    Output("dr-week",     "className"),
     Output("dr-2weeks",   "className"),
     Output("dr-month",    "className"),
     Output("dr-3month",   "className"),
@@ -1171,9 +1174,31 @@ DR_LABELS = {"2weeks": "שבועיים", "month": "חודש אחרון", "3month
 )
 def set_date_range(*_):
     ctx = callback_context
-    btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "dr-all"
-    val = DR_VALS.get(btn, "all")
+    btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "dr-3month"
+    val = DR_VALS.get(btn, "3month")
     classes = ["dr-btn active" if b == btn else "dr-btn" for b in DR_BTNS]
+    return (val, *classes)
+
+
+@app.callback(
+    Output("date-range", "data", allow_duplicate=True),
+    Output("dr-week",    "className", allow_duplicate=True),
+    Output("dr-2weeks",  "className", allow_duplicate=True),
+    Output("dr-month",   "className", allow_duplicate=True),
+    Output("dr-3month",  "className", allow_duplicate=True),
+    Output("dr-6month",  "className", allow_duplicate=True),
+    Output("dr-year",    "className", allow_duplicate=True),
+    Output("dr-all",     "className", allow_duplicate=True),
+    Input("chart-type", "data"),
+    prevent_initial_call=True,
+)
+def set_default_range_for_mode(chart_type):
+    if chart_type == "bar":
+        active = "dr-week"
+        val = "week"
+    else:
+        return no_update, *([no_update] * 7)
+    classes = ["dr-btn active" if b == active else "dr-btn" for b in DR_BTNS]
     return (val, *classes)
 
 
@@ -1349,25 +1374,7 @@ def build_trend(df, events_df, parties, show_markers=True):
         n = len(grp)
         smoothed = _smooth(grp["mandates"], n)
 
-        # ── Scatter dots: individual polls ──────────────────────────────
-        dot_size = 5 if n > 60 else 7
-        fig.add_trace(go.Scatter(
-            x=grp["date"], y=grp["mandates"],
-            name=label,
-            mode="markers",
-            marker=dict(size=dot_size, opacity=0.55, color=color, line=dict(width=0)),
-            opacity=1.0,
-            legendgroup=party,
-            customdata=grp[["media_outlet"]].values,
-            hovertemplate=(
-                f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
-                "%{x|%d/%m/%Y}<br>"
-                "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
-                "<extra></extra>"
-            ),
-        ))
-
-        # ── Smooth trend line ────────────────────────────────────────────
+        # ── Smooth trend line only ───────────────────────────────────────
         fig.add_trace(go.Scatter(
             x=grp["date"], y=smoothed,
             name=label,
@@ -1375,8 +1382,14 @@ def build_trend(df, events_df, parties, show_markers=True):
             line=dict(color=color, width=2.5),
             opacity=1.0,
             legendgroup=party,
-            showlegend=False,
-            hoverinfo="skip",
+            **{"data-party": party},
+            customdata=grp[["media_outlet"]].values,
+            hovertemplate=(
+                f"<b>{label}</b>  %{{y:.1f}} מנדטים<br>"
+                "%{x|%d/%m/%Y}<br>"
+                "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
+                "<extra></extra>"
+            ),
         ))
 
     _add_event_vlines(fig, events_df)
@@ -1406,13 +1419,11 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
             continue
         n = len(grp)
         smoothed = _smooth(grp["_bt"], n)
-        dot_size = 5 if n > 60 else 7
-        # Dots
         fig.add_trace(go.Scatter(
-            x=grp["date"], y=grp["_bt"],
+            x=grp["date"], y=smoothed,
             name=bloc["name"],
-            mode="markers",
-            marker=dict(size=dot_size, opacity=0.5, color=bloc["color"], line=dict(width=0)),
+            mode="lines",
+            line=dict(color=bloc["color"], width=2.5),
             opacity=1.0,
             legendgroup=bloc["name"],
             customdata=grp[["media_outlet"]].values,
@@ -1422,17 +1433,6 @@ def build_trend_blocs(df, events_df, selected_blocs, show_markers=True):
                 "<span style='font-size:10px;color:#aaa'>%{customdata[0]}</span>"
                 "<extra></extra>"
             ),
-        ))
-        # Smooth line
-        fig.add_trace(go.Scatter(
-            x=grp["date"], y=smoothed,
-            name=bloc["name"],
-            mode="lines",
-            line=dict(color=bloc["color"], width=2.5),
-            opacity=1.0,
-            legendgroup=bloc["name"],
-            showlegend=False,
-            hoverinfo="skip",
         ))
     _add_event_vlines(fig, events_df)
     _style_fig(fig)
