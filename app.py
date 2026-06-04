@@ -1228,7 +1228,6 @@ def apply_date_range(df, date_range):
     Output("shown-parties", "data"),
     Output("shown-blocs",   "data"),
     Output("shown-events",  "data"),
-    Output("selected-parties", "data", allow_duplicate=True),
     Input("interval", "n_intervals"),
     Input("selected-outlets", "data"),
     Input("chart-type", "data"),
@@ -1251,7 +1250,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             annotations=[dict(text="טוען נתונים...", showarrow=False, font_size=18)],
             paper_bgcolor="#fff", plot_bgcolor="#fff",
         )
-        return fig, "", [], [], [], no_update
+        return fig, "", [], [], []
 
     status = f"עדכון: {df['fetched_at'].max()[:16]}  |  {len(df)} סקרים"
     df_ranged = apply_date_range(df, date_range)
@@ -1278,7 +1277,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
             for p in next((x["parties"] for x in BLOCS if x["name"] == b), [])
         )]
         shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
-        return fig, status, parties, shown_blocs, shown_ev, no_update
+        return fig, status, parties, shown_blocs, shown_ev
     else:
         fig = build_trend(df_ranged, events_df, parties, show_markers) if chart_type == "trend" \
             else build_bar(df_ranged, parties)
@@ -1287,7 +1286,7 @@ def update_chart(_, outlets, chart_type, parties, selected_event_ids,
         shown_ev = list(sel_ids & set(events_df["id"].tolist() if not events_df.empty else []))
         # Sync selected-parties to only those with data (fixes button/chart mismatch)
         new_sel = shown if shown != parties else no_update
-        return fig, status, shown, sel_blocs, shown_ev, new_sel
+        return fig, status, shown, sel_blocs, shown_ev
 
 
 
