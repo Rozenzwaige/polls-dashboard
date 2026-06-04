@@ -631,6 +631,11 @@ app.index_string = """<!DOCTYPE html>
   .fullscreen-active #center-col { width: 100% !important; flex: 0 0 100% !important; max-width: 100% !important; }
   .fullscreen-active #left-col { display: none !important; }
 
+  /* ── Hemicycle cursor ── */
+  #hemicycle-graph .nsewdrag { cursor: grab !important; }
+  #hemicycle-graph .nsewdrag:active { cursor: grabbing !important; }
+  #hemicycle-graph svg { cursor: grab !important; }
+
   /* ── Hemicycle ── */
   .hemicycle-title {
     font-size: 0.65rem; font-weight: 700; color: var(--purple);
@@ -1430,6 +1435,7 @@ def build_hemicycle(df, date_range, coalition_left):
             width=[width_deg],
             base=[0.35],
             name=bname,
+            customdata=[bname],   # used by click callback
             marker_color=col,
             marker_line_color="white",
             marker_line_width=1.5,
@@ -1438,16 +1444,24 @@ def build_hemicycle(df, date_range, coalition_left):
         ))
         current += width_deg
 
-    # 60-line marker (at 90° = top center)
-    # Add as text annotation at angle=90, r≈1.05
+    # ── 60-seat dividing line at 90° (top center) — thick white + outline ──
+    # Draw as two overlapping scatterpolar: dark outline first, white on top
+    for lw, lc, ls in [(5, "#222", "solid"), (3, "white", "solid")]:
+        traces.append(go.Scatterpolar(
+            r=[0.33, 1.08],
+            theta=[90, 90],
+            mode="lines",
+            line=dict(color=lc, width=lw, dash=ls),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+    # "60" label
     traces.append(go.Scatterpolar(
-        r=[0.35, 1.05],
-        theta=[90, 90],
-        mode="lines+text",
-        line=dict(color="#555", width=1.5, dash="dot"),
-        text=["", "60"],
-        textposition="top center",
-        textfont=dict(size=9, color="#555"),
+        r=[1.18],
+        theta=[90],
+        mode="text",
+        text=["60"],
+        textfont=dict(size=10, color="#1A1A1A", family="Heebo,Arial"),
         hoverinfo="skip",
         showlegend=False,
     ))
@@ -2010,6 +2024,32 @@ def update_hemicycle(date_range, outlets, coalition_left, _):
               for b in BLOCS],
         ], style={"marginTop":"4px","textAlign":"center"}),
     ])
+
+
+@app.callback(
+    Output("coalition-left", "data", allow_duplicate=True),
+    Input("hemicycle-graph", "clickData"),
+    State("coalition-left", "data"),
+    prevent_initial_call=True,
+)
+def hemi_graph_click(click_data, coalition_left):
+    """Drag bloc by clicking: theta < 90 → right side, theta > 90 → left side."""
+    if not click_data or not click_data.get("points"):
+        return no_update
+    pt = click_data["points"][0]
+    # Only barpolar traces have customdata with bloc name
+    bloc = (pt.get("customdata") or [None])[0] if isinstance(pt.get("customdata"), list) else pt.get("customdata")
+    if not bloc:
+        return no_update
+    theta = pt.get("theta", 90)
+    current = list(coalition_left or [])
+    if theta > 90:   # left half of semicircle → left coalition
+        if bloc not in current:
+            current.append(bloc)
+    else:            # right half → remove from left coalition
+        if bloc in current:
+            current.remove(bloc)
+    return current
 
 
 @app.callback(
