@@ -25,10 +25,8 @@ EVENTS_DB_PATH = f"{_DATA}/events.db"   # separate from polls.db — never delet
 
 BLOCS = [
     # סדר מימין לשמאל בכנסת — בגרף: ימין קיצוני בקצה הימני
-    {"name": "ערבים",            "parties": ["hadash_taal", "balad", "raam", "reshima_meshutefet"],                   "color": "#065F46"},
-    {"name": "מרכז-שמאל",        "parties": ["demokratim"],                                                            "color": "#D93025"},
-    {"name": "חרדים",            "parties": ["yahadut_tora", "shas"],                                                  "color": "#1B4332"},
-    {"name": "ימין סוציאלי",     "parties": ["likud"],                                                                 "color": "#3D1040"},
+    {"name": "מרכז-שמאל-ערבים",  "parties": ["demokratim", "hadash_taal", "balad", "raam", "reshima_meshutefet"], "color": "#D93025"},
+    {"name": "ימין סוציאלי",     "parties": ["likud", "yahadut_tora", "shas"],                                        "color": "#3D1040"},
     {"name": "ימין ניאו-ליברלי", "parties": ["beyahad", "israel_beiteinu", "kahol_lavan", "yashar", "miluimnikim"],   "color": "#1E3A8A"},
     {"name": "ימין קיצוני",      "parties": ["zionut_datit", "otzma_yehudit"],                                        "color": "#7F1D1D"},
 ]
