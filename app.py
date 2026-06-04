@@ -622,6 +622,25 @@ app.index_string = """<!DOCTYPE html>
   .feed-type-poll .feed-title { color: var(--purple); }
   .feed-type-alert .feed-title { color: var(--coral); }
 
+  /* ── Event annotation overflow fix ── */
+  #main-chart svg.main-svg { overflow: visible !important; }
+  #main-chart .infolayer { overflow: visible !important; }
+
+  /* ── Fullscreen mode ── */
+  .fullscreen-active #feed-col-wrap { display: none !important; }
+  .fullscreen-active #center-col { width: 100% !important; flex: 0 0 100% !important; max-width: 100% !important; }
+  .fullscreen-active #left-col { display: none !important; }
+
+  /* ── Hemicycle ── */
+  .hemicycle-title {
+    font-size: 0.65rem; font-weight: 700; color: var(--purple);
+    text-align: center; margin-bottom: 2px;
+  }
+  .hemi-coalition-count {
+    display: flex; justify-content: space-between;
+    font-size: 0.6rem; color: var(--muted); padding: 0 4px;
+  }
+
   /* ── Kill Plotly crosshair cursor ── */
   #main-chart .js-plotly-plot,
   #main-chart .js-plotly-plot *,
@@ -708,6 +727,8 @@ def public_layout():
         dcc.Store(id="shown-blocs",   data=[b["name"] for b in BLOCS]),
         dcc.Store(id="shown-events",  data=[]),
         dcc.Store(id="_pill-sync",    data=0),
+        dcc.Store(id="fullscreen",    data=False),
+        dcc.Store(id="coalition-left", data=["מרכז-שמאל-ערבים"]),  # default: left side
 
         html.Header([
             html.Img(src="/assets/rose.png", className="header-rose"),
@@ -741,8 +762,8 @@ def public_layout():
                                 for item in MOCK_FEED
                             ],
                         ], className="feed-body"),
-                    ], className="feed-panel"),
-                    width=3,
+                    ], className="feed-panel", id="feed-col-wrap"),
+                    width=3, id="feed-col",
                 ),
 
                 # MIDDLE: chart + party pills
@@ -769,13 +790,19 @@ def public_layout():
                             html.Button("הכל",      id="dr-all",    className="dr-btn",        n_clicks=0),
                         ], style={"display":"flex","gap":"4px","alignItems":"center","flex":"1","justifyContent":"center"}),
 
-                        # Right: מפלגות/גושים
+                        # Right: מפלגות/גושים + fullscreen
                         html.Div([
                             html.Button("מפלגות", id="btn-parties",
                                         className="ct-btn active", n_clicks=0),
                             html.Button("גושים", id="btn-blocs",
                                         className="ct-btn", n_clicks=0),
-                        ], style={"display":"flex","gap":"4px","marginRight":"8px"}),
+                            html.Button("⛶", id="btn-fullscreen", n_clicks=0,
+                                        title="מסך מלא",
+                                        style={"marginRight":"6px","fontSize":"1rem",
+                                               "padding":"2px 8px","background":"transparent",
+                                               "border":"1.5px solid #ccc","borderRadius":"4px",
+                                               "cursor":"pointer","color":"#666"}),
+                        ], style={"display":"flex","gap":"4px","alignItems":"center","marginRight":"8px"}),
                     ], className="date-range-strip",
                        style={"justifyContent":"space-between"}),
 
@@ -790,13 +817,13 @@ def public_layout():
                     html.Div(id="party-pills-container", className="party-pills-row"),
                     html.Div(id="status-row", className="status-row"),
                     html.Div(id="events-box-container"),
-                ], width=7),
+                ], id="center-col", width=7),
 
-                # FAR LEFT: outlet pills
-                dbc.Col(
+                # FAR LEFT: outlet pills + hemicycle
+                dbc.Col([
                     html.Div(id="outlet-pills-container", className="outlet-col"),
-                    width=2,
-                ),
+                    html.Div(id="hemicycle-container", style={"marginTop": "12px"}),
+                ], id="left-col", width=2),
             ]),
         ], className="main"),
     ])
@@ -1347,6 +1374,113 @@ def _empty_chart(msg="טוען נתונים..."):
     return fig
 
 
+def build_hemicycle(df, date_range, coalition_left):
+    """Parliament arc chart. Right-wing blocs on right (0°), left-wing on left (180°)."""
+    import math
+    df_ranged = apply_date_range(df, date_range) if not df.empty else df
+    coalition_left = set(coalition_left or [])
+
+    # Calculate raw averages per bloc
+    raw = {}
+    for bloc in BLOCS:
+        cols = [p for p in bloc["parties"] if p in df_ranged.columns]
+        if cols:
+            val = df_ranged[cols].sum(axis=1, min_count=1).dropna().mean()
+            if pd.notna(val) and val > 0:
+                raw[bloc["name"]] = val
+
+    if not raw:
+        return go.Figure()
+
+    # Round to exactly 120 mandates
+    total_raw = sum(raw.values())
+    rounded = {k: max(1, round(v / total_raw * 120)) for k, v in raw.items()}
+    diff = 120 - sum(rounded.values())
+    if diff:
+        biggest = max(rounded, key=rounded.get)
+        rounded[biggest] += diff
+
+    # Parliament order: right → left
+    # ימין קיצוני | ימין סוציאלי | ימין ניאו-ליברלי | מרכז-שמאל-ערבים
+    order = [b["name"] for b in reversed(BLOCS)]  # right to left
+    color_map = {b["name"]: b["color"] for b in BLOCS}
+
+    # Build polar bars from 0° (right) to 180° (left) counterclockwise
+    # Blocs arranged according to coalition_left: coalition blocs cluster on LEFT side
+    right_blocs = [n for n in order if n not in coalition_left]
+    left_blocs  = [n for n in order if n in coalition_left]
+    arranged = right_blocs + left_blocs  # right→left in the semicircle
+
+    traces = []
+    current = 0.0  # degrees, starting from right (0°)
+    bloc_positions = {}
+
+    for bname in arranged:
+        if bname not in rounded:
+            continue
+        seats = rounded[bname]
+        width_deg = seats / 120 * 180
+        center_deg = current + width_deg / 2
+        bloc_positions[bname] = center_deg
+
+        col = color_map.get(bname, "#888")
+        traces.append(go.Barpolar(
+            r=[0.95],
+            theta=[center_deg],
+            width=[width_deg],
+            base=[0.35],
+            name=bname,
+            marker_color=col,
+            marker_line_color="white",
+            marker_line_width=1.5,
+            hovertemplate=f"<b>{bname}</b><br>{seats} מנדטים<extra></extra>",
+            opacity=1.0,
+        ))
+        current += width_deg
+
+    # 60-line marker (at 90° = top center)
+    # Add as text annotation at angle=90, r≈1.05
+    traces.append(go.Scatterpolar(
+        r=[0.35, 1.05],
+        theta=[90, 90],
+        mode="lines+text",
+        line=dict(color="#555", width=1.5, dash="dot"),
+        text=["", "60"],
+        textposition="top center",
+        textfont=dict(size=9, color="#555"),
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    coal_count = sum(rounded.get(n, 0) for n in coalition_left)
+    opp_count  = 120 - coal_count
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=False, range=[0, 1.3]),
+            angularaxis=dict(
+                visible=False,
+                direction="counterclockwise",
+                rotation=0,
+            ),
+            sector=[0, 180],
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        showlegend=False,
+        margin=dict(l=5, r=5, t=5, b=0),
+        height=160,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        annotations=[dict(
+            x=0.5, y=0.12, xref="paper", yref="paper",
+            text=f"◀ {opp_count} | {coal_count} ▶",
+            showarrow=False, font=dict(size=9, color="#666"),
+        )],
+    )
+    return fig, coal_count, opp_count
+
+
 def _smooth(series, n_points):
     """Double-pass centered rolling average (no scipy needed)."""
     window = max(3, min(n_points // 6, 20))
@@ -1829,6 +1963,119 @@ def delete_admin_event(n_clicks_list, auth):
     event_id = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["index"]
     delete_event_db(event_id)
     return _render_event_list()
+
+
+# ── Hemicycle ────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("hemicycle-container", "children"),
+    Input("date-range", "data"),
+    Input("selected-outlets", "data"),
+    Input("coalition-left", "data"),
+    Input("interval", "n_intervals"),
+)
+def update_hemicycle(date_range, outlets, coalition_left, _):
+    df = load_polls(outlets or None)
+    if df.empty:
+        return html.Div()
+    try:
+        fig, coal, opp = build_hemicycle(df, date_range, coalition_left)
+    except Exception:
+        return html.Div()
+
+    side = "קואליציה" if coal >= 61 else "אופוזיציה"
+    emoji = "✅" if coal >= 61 else "❌"
+
+    return html.Div([
+        html.Div("פרסת קואליציה", className="hemicycle-title"),
+        dcc.Graph(
+            id="hemicycle-graph",
+            figure=fig,
+            config={"displayModeBar": False, "scrollZoom": False},
+            style={"height": "160px"},
+        ),
+        html.Div([
+            html.Span(f"{coal} מנדטים", style={"color":"#2E7D32" if coal >= 61 else "#D93025",
+                                                "fontWeight":"700"}),
+            html.Span(f"{emoji} {side}"),
+        ], className="hemi-coalition-count"),
+        html.Div([
+            html.Span("לחץ על גוש להזזה: ", style={"fontSize":"0.58rem","color":"#aaa"}),
+            *[html.Button(b["name"], id={"type":"hemi-btn","bloc":b["name"]},
+                          n_clicks=0,
+                          style={"fontSize":"0.58rem","padding":"1px 5px","margin":"1px",
+                                 "borderRadius":"8px","border":f"1px solid {b['color']}",
+                                 "background": b["color"] if b["name"] in (coalition_left or []) else "transparent",
+                                 "color": "white" if b["name"] in (coalition_left or []) else b["color"],
+                                 "cursor":"pointer"})
+              for b in BLOCS],
+        ], style={"marginTop":"4px","textAlign":"center"}),
+    ])
+
+
+@app.callback(
+    Output("coalition-left", "data"),
+    Input({"type": "hemi-btn", "bloc": ALL}, "n_clicks"),
+    State("coalition-left", "data"),
+    prevent_initial_call=True,
+)
+def toggle_coalition(n_clicks_list, current):
+    ctx = callback_context
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        bloc = json.loads(real[0]["prop_id"].split(".")[0])["bloc"]
+    except Exception:
+        return no_update
+    current = list(current or [])
+    if bloc in current:
+        current.remove(bloc)
+    else:
+        current.append(bloc)
+    return current
+
+
+@app.callback(
+    Output("hemicycle-graph", "figure", allow_duplicate=True),
+    Input("hemicycle-graph", "hoverData"),
+    State("hemicycle-graph", "figure"),
+    prevent_initial_call=True,
+)
+def hemicycle_hover(hover_data, fig):
+    if not fig or not fig.get("data"):
+        return no_update
+    n = len(fig["data"])
+    import copy
+    f = copy.deepcopy(fig)
+    if hover_data and hover_data.get("points"):
+        curve = hover_data["points"][0].get("curveNumber", -1)
+        for i in range(n):
+            f["data"][i]["opacity"] = 1.0 if i == curve else 0.2
+    else:
+        for i in range(n):
+            f["data"][i]["opacity"] = 1.0
+    return f
+
+
+# ── Fullscreen ────────────────────────────────────────────────────────────────
+app.clientside_callback(
+    """
+    function(n_clicks, is_full) {
+        var main = document.querySelector('.main');
+        if (!main) return !is_full;
+        if (!is_full) {
+            main.classList.add('fullscreen-active');
+        } else {
+            main.classList.remove('fullscreen-active');
+        }
+        return !is_full;
+    }
+    """,
+    Output("fullscreen", "data"),
+    Input("btn-fullscreen", "n_clicks"),
+    State("fullscreen", "data"),
+    prevent_initial_call=True,
+)
 
 
 # ── Clientside: sync pill active state from shown-parties (no server round-trip)
