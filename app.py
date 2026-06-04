@@ -387,10 +387,12 @@ app.index_string = """<!DOCTYPE html>
     border: 1.5px solid currentColor;
     background: transparent;
     cursor: pointer;
-    transition: all 0.12s;
+    transition: opacity 0.18s ease, background-color 0.18s ease, color 0.18s ease;
     opacity: 0.38;
   }
   .p-pill.active { opacity: 1; }
+  .dr-btn { transition: all 0.14s ease; }
+  .ct-btn { transition: all 0.14s ease; }
 
   .status-row {
     text-align: left;
@@ -707,6 +709,7 @@ def public_layout():
         dcc.Store(id="shown-parties", data=DEFAULT_PARTIES),
         dcc.Store(id="shown-blocs",   data=[b["name"] for b in BLOCS]),
         dcc.Store(id="shown-events",  data=[]),
+        dcc.Store(id="_pill-sync",    data=0),
 
         html.Header([
             html.Img(src="/assets/rose.png", className="header-rose"),
@@ -1092,6 +1095,7 @@ def render_bottom_pills(sel_parties, view_mode, sel_blocs, chart_type, shown_par
                 id={"type": "bloc-pill", "bloc": bloc["name"]},
                 className=f"p-pill {'active' if active else ''}",
                 n_clicks=0,
+                **{"data-bloc-name": bloc["name"]},
                 style={
                     "color": "white" if active else color,
                     "backgroundColor": color if active else "transparent",
@@ -1828,6 +1832,40 @@ def delete_admin_event(n_clicks_list, auth):
     event_id = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["index"]
     delete_event_db(event_id)
     return _render_event_list()
+
+
+# ── Clientside: sync pill active state from shown-parties (no server round-trip)
+app.clientside_callback(
+    """
+    function(shownParties, shownBlocs) {
+        if (!shownParties) return window.dash_clientside.no_update;
+        var shownSet = new Set(shownParties || []);
+        var shownBlocsSet = new Set(shownBlocs || []);
+
+        // Update party pills
+        document.querySelectorAll('.p-pill[data-party-key]').forEach(function(btn) {
+            var key = btn.getAttribute('data-party-key');
+            var isActive = shownSet.has(key);
+            btn.classList.toggle('active', isActive);
+            btn.style.opacity = isActive ? '1' : '0.38';
+        });
+
+        // Update bloc pills
+        document.querySelectorAll('.p-pill[data-bloc-name]').forEach(function(btn) {
+            var name = btn.getAttribute('data-bloc-name');
+            var isActive = shownBlocsSet.has(name);
+            btn.classList.toggle('active', isActive);
+            btn.style.opacity = isActive ? '1' : '0.38';
+        });
+
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_pill-sync", "data"),  # dummy output
+    Input("shown-parties", "data"),
+    Input("shown-blocs",   "data"),
+    prevent_initial_call=True,
+)
 
 
 if __name__ == "__main__":
