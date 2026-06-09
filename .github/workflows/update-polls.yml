@@ -1,0 +1,35 @@
+name: Update Polls Data
+
+on:
+  schedule:
+    # 04:00 Israel time = 01:00 UTC (summer, UTC+3)
+    - cron: '0 1 * * *'
+    # 18:00 Israel time = 15:00 UTC (summer, UTC+3)
+    - cron: '0 15 * * *'
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Scrape & sync polls
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install requests pandas lxml html5lib beautifulsoup4
+
+      - name: Scrape and push to dashboard
+        env:
+          SYNC_KEY: ${{ secrets.SYNC_KEY }}
+          DASHBOARD_URL: https://roza-polls.fly.dev
+        run: python github_action_sync.py

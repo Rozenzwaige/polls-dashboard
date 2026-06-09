@@ -31,6 +31,14 @@ BLOCS = [
     {"name": "ימין קיצוני",      "parties": ["zionut_datit", "otzma_yehudit"],                                        "color": "#7F1D1D"},
 ]
 
+# סדר מפלגות בפרסת הכנסת — ימין קיצוני (0°) → שמאל-ערבים (180°)
+PARTY_ORDER = [
+    "otzma_yehudit", "zionut_datit",
+    "shas", "yahadut_tora", "likud",
+    "miluimnikim", "yashar", "kahol_lavan", "israel_beiteinu", "yesh_atid", "beyahad",
+    "demokratim", "hadash_taal", "raam", "balad", "reshima_meshutefet",
+]
+
 DEFAULT_PARTIES = [
     "likud", "yahadut_tora", "shas", "kahol_lavan",
     "israel_beiteinu", "demokratim", "zionut_datit",
@@ -639,11 +647,35 @@ app.index_string = """<!DOCTYPE html>
   /* ── Hemicycle ── */
   .hemicycle-title {
     font-size: 0.65rem; font-weight: 700; color: var(--purple);
-    text-align: center; margin-bottom: 2px;
+    text-align: center; margin-bottom: 0;
+  }
+  .hemi-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 2px; margin-bottom: 2px;
+  }
+  .hemi-mode-toggle {
+    display: flex; gap: 2px;
+  }
+  .hemi-mode-btn {
+    font-size: 0.55rem; padding: 1px 6px; border-radius: 8px;
+    border: 1px solid var(--purple); background: transparent;
+    color: var(--purple); cursor: pointer; font-family: Heebo, Arial;
+    transition: all 0.15s;
+  }
+  .hemi-mode-btn.active {
+    background: var(--purple); color: white;
   }
   .hemi-coalition-count {
     display: flex; justify-content: space-between;
     font-size: 0.6rem; color: var(--muted); padding: 0 4px;
+  }
+  .hemi-bloc-btns {
+    margin-top: 3px; display: flex; flex-wrap: wrap;
+    justify-content: center; gap: 2px; align-items: center;
+  }
+  .hemi-bloc-pill {
+    font-size: 0.55rem; padding: 1px 5px; border-radius: 8px;
+    cursor: pointer; transition: all 0.15s; font-family: Heebo, Arial;
   }
 
   /* ── Kill Plotly crosshair cursor ── */
@@ -733,7 +765,9 @@ def public_layout():
         dcc.Store(id="shown-events",  data=[]),
         dcc.Store(id="_pill-sync",    data=0),
         dcc.Store(id="fullscreen",    data=False),
-        dcc.Store(id="coalition-left", data=["מרכז-שמאל-ערבים"]),  # default: left side
+        dcc.Store(id="coalition-left",    data=["מרכז-שמאל-ערבים"]),  # blocs in coalition
+        dcc.Store(id="coalition-parties", data=["demokratim", "hadash_taal", "raam", "balad"]),
+        dcc.Store(id="hemi-mode",         data="blocs"),  # "blocs" | "parties"
 
         html.Header([
             html.Img(src="/assets/rose.png", className="header-rose"),
@@ -1379,105 +1413,124 @@ def _empty_chart(msg="טוען נתונים..."):
     return fig
 
 
-def build_hemicycle(df, date_range, coalition_left):
-    """Parliament arc chart. Right-wing blocs on right (0°), left-wing on left (180°)."""
-    import math
+def build_hemicycle(df, date_range, coalition_set, mode="blocs"):
+    """Parliament arc: opposition (right, 0°) → coalition (left, 180°).
+    mode='blocs'   → coalition_set holds bloc names
+    mode='parties' → coalition_set holds party keys
+    """
     df_ranged = apply_date_range(df, date_range) if not df.empty else df
-    coalition_left = set(coalition_left or [])
+    coalition_set = set(coalition_set or [])
+    SEAT_LINE = 61 / 120 * 180  # ≈ 91.5°
 
-    # Calculate raw averages per bloc
-    raw = {}
-    for bloc in BLOCS:
-        cols = [p for p in bloc["parties"] if p in df_ranged.columns]
-        if cols:
+    # ── Build item list ──────────────────────────────────────────────────────
+    if mode == "blocs":
+        order = [b["name"] for b in reversed(BLOCS)]   # ימין קיצוני → מרכז-שמאל
+        color_map = {b["name"]: b["color"] for b in BLOCS}
+        items = []
+        for bname in order:
+            bloc = next(b for b in BLOCS if b["name"] == bname)
+            cols = [p for p in bloc["parties"] if p in df_ranged.columns]
+            if not cols:
+                continue
             val = df_ranged[cols].sum(axis=1, min_count=1).dropna().mean()
             if pd.notna(val) and val > 0:
-                raw[bloc["name"]] = val
+                items.append({"key": bname, "label": bname,
+                              "color": color_map[bname], "raw": float(val)})
+    else:  # parties
+        items = []
+        for pkey in PARTY_ORDER:
+            col = "_beyahad_merged" if pkey == "beyahad" else pkey
+            actual = col if col in df_ranged.columns else (pkey if pkey in df_ranged.columns else None)
+            if not actual:
+                continue
+            val = df_ranged[actual].dropna().mean()
+            if pd.notna(val) and val > 0:
+                items.append({"key": pkey, "label": PARTY_HE.get(pkey, pkey),
+                              "color": PARTY_COLORS.get(pkey, "#888"), "raw": float(val)})
 
-    if not raw:
-        return go.Figure()
+    if not items:
+        return go.Figure(), 0, 0
 
-    # Round to exactly 120 mandates
-    total_raw = sum(raw.values())
-    rounded = {k: max(1, round(v / total_raw * 120)) for k, v in raw.items()}
-    diff = 120 - sum(rounded.values())
+    # ── Scale to 120 mandates ─────────────────────────────────────────────────
+    total_raw = sum(it["raw"] for it in items)
+    for it in items:
+        it["seats"] = max(1, round(it["raw"] / total_raw * 120))
+    diff = 120 - sum(it["seats"] for it in items)
     if diff:
-        biggest = max(rounded, key=rounded.get)
-        rounded[biggest] += diff
+        max(items, key=lambda x: x["seats"])["seats"] += diff
 
-    # Parliament order: right → left
-    # ימין קיצוני | ימין סוציאלי | ימין ניאו-ליברלי | מרכז-שמאל-ערבים
-    order = [b["name"] for b in reversed(BLOCS)]  # right to left
-    color_map = {b["name"]: b["color"] for b in BLOCS}
+    # ── Arrange: opposition first (0°), coalition second (→ 180°) ────────────
+    opp_items  = [it for it in items if it["key"] not in coalition_set]
+    coal_items = [it for it in items if it["key"] in coalition_set]
+    arranged   = opp_items + coal_items
 
-    # Build polar bars from 0° (right) to 180° (left) counterclockwise
-    # Blocs arranged according to coalition_left: coalition blocs cluster on LEFT side
-    right_blocs = [n for n in order if n not in coalition_left]
-    left_blocs  = [n for n in order if n in coalition_left]
-    arranged = right_blocs + left_blocs  # right→left in the semicircle
+    opp_seats  = sum(it["seats"] for it in opp_items)
+    coal_seats = sum(it["seats"] for it in coal_items)
 
+    # ── Background arc regions ────────────────────────────────────────────────
     traces = []
-    current = 0.0  # degrees, starting from right (0°)
-    bloc_positions = {}
+    opp_span  = opp_seats  / 120 * 180
+    coal_span = coal_seats / 120 * 180
+    if opp_span > 0:
+        traces.append(go.Barpolar(
+            r=[1.06], theta=[opp_span / 2], width=[opp_span], base=[0.30],
+            marker_color="rgba(211,47,47,0.07)", marker_line_width=0,
+            hoverinfo="skip", showlegend=False,
+        ))
+    if coal_span > 0:
+        traces.append(go.Barpolar(
+            r=[1.06], theta=[opp_span + coal_span / 2], width=[coal_span], base=[0.30],
+            marker_color="rgba(46,125,50,0.10)", marker_line_width=0,
+            hoverinfo="skip", showlegend=False,
+        ))
 
-    for bname in arranged:
-        if bname not in rounded:
-            continue
-        seats = rounded[bname]
-        width_deg = seats / 120 * 180
-        center_deg = current + width_deg / 2
-        bloc_positions[bname] = center_deg
-
-        col = color_map.get(bname, "#888")
+    # ── Party / bloc bars ─────────────────────────────────────────────────────
+    cur = 0.0
+    for it in arranged:
+        in_coal = it["key"] in coalition_set
+        seats   = it["seats"]
+        w       = seats / 120 * 180
+        center  = cur + w / 2
+        label_str = ("✓ " if in_coal else "") + it["label"]
         traces.append(go.Barpolar(
             r=[0.95],
-            theta=[center_deg],
-            width=[width_deg],
+            theta=[center],
+            width=[w],
             base=[0.35],
-            name=bname,
-            customdata=[bname],   # used by click callback
-            marker_color=col,
-            marker_line_color="white",
-            marker_line_width=1.5,
-            hovertemplate=f"<b>{bname}</b><br>{seats} מנדטים<extra></extra>",
-            opacity=1.0,
+            name=it["label"],
+            customdata=[it["key"]],
+            marker_color=it["color"],
+            marker_line_color="#fff" if in_coal else "rgba(255,255,255,0.4)",
+            marker_line_width=2 if in_coal else 0.8,
+            opacity=1.0 if in_coal else 0.38,
+            hovertemplate=(
+                f"<b>{it['label']}</b><br>"
+                f"{seats} מנדטים<br>"
+                f"{'✅ קואליציה' if in_coal else '⬜ אופוזיציה'}"
+                "<extra></extra>"
+            ),
         ))
-        current += width_deg
+        cur += w
 
-    # ── 60-seat dividing line at 90° (top center) — thick white + outline ──
-    # Draw as two overlapping scatterpolar: dark outline first, white on top
-    for lw, lc, ls in [(5, "#222", "solid"), (3, "white", "solid")]:
+    # ── 61-seat dividing line ──────────────────────────────────────────────────
+    for lw, lc in [(5, "#222"), (3, "white")]:
         traces.append(go.Scatterpolar(
-            r=[0.33, 1.08],
-            theta=[90, 90],
-            mode="lines",
-            line=dict(color=lc, width=lw, dash=ls),
-            hoverinfo="skip",
-            showlegend=False,
+            r=[0.30, 1.08], theta=[SEAT_LINE, SEAT_LINE],
+            mode="lines", line=dict(color=lc, width=lw),
+            hoverinfo="skip", showlegend=False,
         ))
-    # "60" label
     traces.append(go.Scatterpolar(
-        r=[1.18],
-        theta=[90],
-        mode="text",
-        text=["60"],
+        r=[1.20], theta=[SEAT_LINE],
+        mode="text", text=["61"],
         textfont=dict(size=10, color="#1A1A1A", family="Heebo,Arial"),
-        hoverinfo="skip",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
-    coal_count = sum(rounded.get(n, 0) for n in coalition_left)
-    opp_count  = 120 - coal_count
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(visible=False, range=[0, 1.3]),
-            angularaxis=dict(
-                visible=False,
-                direction="counterclockwise",
-                rotation=0,
-            ),
+            radialaxis=dict(visible=False, range=[0, 1.35]),
+            angularaxis=dict(visible=False, direction="counterclockwise", rotation=0),
             sector=[0, 180],
             bgcolor="rgba(0,0,0,0)",
         ),
@@ -1486,13 +1539,19 @@ def build_hemicycle(df, date_range, coalition_left):
         height=160,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        annotations=[dict(
-            x=0.5, y=0.12, xref="paper", yref="paper",
-            text=f"◀ {opp_count} | {coal_count} ▶",
-            showarrow=False, font=dict(size=9, color="#666"),
-        )],
+        annotations=[
+            dict(x=0.5, y=0.10, xref="paper", yref="paper",
+                 text=f"◀ {opp_seats} | {coal_seats} ▶",
+                 showarrow=False, font=dict(size=9, color="#888")),
+            dict(x=0.08, y=0.42, xref="paper", yref="paper",
+                 text="אופוזיציה", showarrow=False,
+                 font=dict(size=7.5, color="rgba(211,47,47,0.8)", family="Heebo,Arial")),
+            dict(x=0.92, y=0.42, xref="paper", yref="paper",
+                 text="קואליציה", showarrow=False,
+                 font=dict(size=7.5, color="rgba(46,125,50,0.9)", family="Heebo,Arial")),
+        ],
     )
-    return fig, coal_count, opp_count
+    return fig, coal_seats, opp_seats
 
 
 def _smooth(series, n_points):
@@ -1985,75 +2044,135 @@ def delete_admin_event(n_clicks_list, auth):
     Input("date-range", "data"),
     Input("selected-outlets", "data"),
     Input("coalition-left", "data"),
+    Input("coalition-parties", "data"),
+    Input("hemi-mode", "data"),
     Input("interval", "n_intervals"),
 )
-def update_hemicycle(date_range, outlets, coalition_left, _):
+def update_hemicycle(date_range, outlets, coalition_blocs, coalition_parties, hemi_mode, _):
+    hemi_mode = hemi_mode or "blocs"
+    coalition_set = set(coalition_blocs or []) if hemi_mode == "blocs" else set(coalition_parties or [])
     df = load_polls(outlets or None)
     if df.empty:
         return html.Div()
     try:
-        fig, coal, opp = build_hemicycle(df, date_range, coalition_left)
+        df2 = _merge_beyahad(df) if hemi_mode == "parties" else df
+        fig, coal, opp = build_hemicycle(df2, date_range, coalition_set, mode=hemi_mode)
     except Exception:
         return html.Div()
 
-    side = "קואליציה" if coal >= 61 else "אופוזיציה"
     emoji = "✅" if coal >= 61 else "❌"
 
+    # ── Bloc buttons ─────────────────────────────────────────────────────────
+    if hemi_mode == "blocs":
+        buttons = [
+            html.Button(
+                b["name"],
+                id={"type": "hemi-btn", "bloc": b["name"]},
+                n_clicks=0,
+                className="hemi-bloc-pill",
+                style={
+                    "border": f"1.5px solid {b['color']}",
+                    "background": b["color"] if b["name"] in coalition_set else "transparent",
+                    "color": "white" if b["name"] in coalition_set else b["color"],
+                },
+            )
+            for b in BLOCS
+        ]
+        label = html.Span("לחץ להזזת גוש:", style={"fontSize":"0.55rem","color":"#aaa"})
+    else:
+        buttons = [
+            html.Button(
+                PARTY_HE.get(p, p),
+                id={"type": "hemi-party-btn", "party": p},
+                n_clicks=0,
+                className="hemi-bloc-pill",
+                style={
+                    "border": f"1.5px solid {PARTY_COLORS.get(p,'#888')}",
+                    "background": PARTY_COLORS.get(p,"#888") if p in coalition_set else "transparent",
+                    "color": "white" if p in coalition_set else PARTY_COLORS.get(p,"#888"),
+                    "fontSize": "0.5rem",
+                },
+            )
+            for p in PARTY_ORDER if p in (df.columns.tolist() + ["beyahad"])
+        ]
+        label = html.Span("לחץ להזזת מפלגה:", style={"fontSize":"0.55rem","color":"#aaa"})
+
     return html.Div([
-        html.Div("פרסת קואליציה", className="hemicycle-title"),
+        # Title + mode toggle
+        html.Div([
+            html.Span("בניית קואליציות", className="hemicycle-title"),
+            html.Div([
+                html.Button("גושים",   id={"type":"hemi-mode-btn","mode":"blocs"},   n_clicks=0,
+                            className="hemi-mode-btn" + (" active" if hemi_mode == "blocs"   else "")),
+                html.Button("מפלגות", id={"type":"hemi-mode-btn","mode":"parties"}, n_clicks=0,
+                            className="hemi-mode-btn" + (" active" if hemi_mode == "parties" else "")),
+            ], className="hemi-mode-toggle"),
+        ], className="hemi-header"),
+
+        # Graph
         dcc.Graph(
             id="hemicycle-graph",
             figure=fig,
             config={"displayModeBar": False, "scrollZoom": False},
             style={"height": "160px"},
         ),
+
+        # Coalition count row
         html.Div([
-            html.Span(f"{coal} מנדטים", style={"color":"#2E7D32" if coal >= 61 else "#D93025",
-                                                "fontWeight":"700"}),
-            html.Span(f"{emoji} {side}"),
+            html.Span([
+                html.Span("קואליציה ", style={"color":"#2E7D32","fontWeight":"700"}),
+                html.Span(f"{coal}", style={"fontWeight":"900",
+                                            "color":"#2E7D32" if coal >= 61 else "#D93025"}),
+                html.Span(f" {emoji}"),
+            ]),
+            html.Span([
+                html.Span("אופוזיציה ", style={"color":"#D93025","fontWeight":"700"}),
+                html.Span(f"{opp}", style={"fontWeight":"900","color":"#D93025"}),
+            ]),
         ], className="hemi-coalition-count"),
-        html.Div([
-            html.Span("לחץ על גוש להזזה: ", style={"fontSize":"0.58rem","color":"#aaa"}),
-            *[html.Button(b["name"], id={"type":"hemi-btn","bloc":b["name"]},
-                          n_clicks=0,
-                          style={"fontSize":"0.58rem","padding":"1px 5px","margin":"1px",
-                                 "borderRadius":"8px","border":f"1px solid {b['color']}",
-                                 "background": b["color"] if b["name"] in (coalition_left or []) else "transparent",
-                                 "color": "white" if b["name"] in (coalition_left or []) else b["color"],
-                                 "cursor":"pointer"})
-              for b in BLOCS],
-        ], style={"marginTop":"4px","textAlign":"center"}),
+
+        # Bloc / party pills
+        html.Div([label, *buttons], className="hemi-bloc-btns"),
     ])
 
 
 @app.callback(
-    Output("coalition-left", "data", allow_duplicate=True),
+    Output("coalition-left",    "data", allow_duplicate=True),
+    Output("coalition-parties", "data", allow_duplicate=True),
     Input("hemicycle-graph", "clickData"),
-    State("coalition-left", "data"),
+    State("coalition-left",    "data"),
+    State("coalition-parties", "data"),
+    State("hemi-mode",         "data"),
     prevent_initial_call=True,
 )
-def hemi_graph_click(click_data, coalition_left):
-    """Drag bloc by clicking: theta < 90 → right side, theta > 90 → left side."""
+def hemi_graph_click(click_data, coal_blocs, coal_parties, hemi_mode):
+    """Click (or drag) on any bar → toggle its coalition membership."""
     if not click_data or not click_data.get("points"):
-        return no_update
-    pt = click_data["points"][0]
-    # Only barpolar traces have customdata with bloc name
-    bloc = (pt.get("customdata") or [None])[0] if isinstance(pt.get("customdata"), list) else pt.get("customdata")
-    if not bloc:
-        return no_update
-    theta = pt.get("theta", 90)
-    current = list(coalition_left or [])
-    if theta > 90:   # left half of semicircle → left coalition
-        if bloc not in current:
-            current.append(bloc)
-    else:            # right half → remove from left coalition
-        if bloc in current:
-            current.remove(bloc)
-    return current
+        return no_update, no_update
+    pt  = click_data["points"][0]
+    key = (pt.get("customdata") or [None])[0] if isinstance(pt.get("customdata"), list) \
+          else pt.get("customdata")
+    if not key:
+        return no_update, no_update
+
+    if (hemi_mode or "blocs") == "parties":
+        current = list(coal_parties or [])
+        if key in current:
+            current.remove(key)
+        else:
+            current.append(key)
+        return no_update, current
+    else:
+        current = list(coal_blocs or [])
+        if key in current:
+            current.remove(key)
+        else:
+            current.append(key)
+        return current, no_update
 
 
 @app.callback(
-    Output("coalition-left", "data"),
+    Output("coalition-left", "data", allow_duplicate=True),
     Input({"type": "hemi-btn", "bloc": ALL}, "n_clicks"),
     State("coalition-left", "data"),
     prevent_initial_call=True,
@@ -2076,6 +2195,46 @@ def toggle_coalition(n_clicks_list, current):
 
 
 @app.callback(
+    Output("coalition-parties", "data", allow_duplicate=True),
+    Input({"type": "hemi-party-btn", "party": ALL}, "n_clicks"),
+    State("coalition-parties", "data"),
+    prevent_initial_call=True,
+)
+def toggle_coalition_parties(n_clicks_list, current):
+    ctx = callback_context
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        party = json.loads(real[0]["prop_id"].split(".")[0])["party"]
+    except Exception:
+        return no_update
+    current = list(current or [])
+    if party in current:
+        current.remove(party)
+    else:
+        current.append(party)
+    return current
+
+
+@app.callback(
+    Output("hemi-mode", "data"),
+    Input({"type": "hemi-mode-btn", "mode": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_hemi_mode(n_clicks_list):
+    ctx = callback_context
+    real = [t for t in ctx.triggered if (t.get("value") or 0) > 0]
+    if not real:
+        return no_update
+    try:
+        mode = json.loads(real[0]["prop_id"].split(".")[0])["mode"]
+    except Exception:
+        return no_update
+    return mode
+
+
+@app.callback(
     Output("hemicycle-graph", "figure", allow_duplicate=True),
     Input("hemicycle-graph", "hoverData"),
     State("hemicycle-graph", "figure"),
@@ -2084,16 +2243,24 @@ def toggle_coalition(n_clicks_list, current):
 def hemicycle_hover(hover_data, fig):
     if not fig or not fig.get("data"):
         return no_update
-    n = len(fig["data"])
     import copy
-    f = copy.deepcopy(fig)
+    f    = copy.deepcopy(fig)
+    data = f["data"]
+    n    = len(data)
+
+    # Identify bar traces (barpolar type, have customdata) vs decorative traces
+    bar_indices = [i for i, d in enumerate(data) if d.get("type") == "barpolar"
+                   and d.get("customdata")]
+
     if hover_data and hover_data.get("points"):
         curve = hover_data["points"][0].get("curveNumber", -1)
-        for i in range(n):
-            f["data"][i]["opacity"] = 1.0 if i == curve else 0.2
+        for i in bar_indices:
+            # Keep coalition bars bright, only dim non-hovered ones
+            orig_op = 1.0 if data[i].get("marker_line_width", 0) >= 2 else 0.38
+            data[i]["opacity"] = 1.0 if i == curve else max(0.12, orig_op * 0.3)
     else:
-        for i in range(n):
-            f["data"][i]["opacity"] = 1.0
+        for i in bar_indices:
+            data[i]["opacity"] = 1.0 if data[i].get("marker_line_width", 0) >= 2 else 0.38
     return f
 
 
@@ -2150,6 +2317,36 @@ app.clientside_callback(
     Input("shown-blocs",   "data"),
     prevent_initial_call=True,
 )
+
+
+# ── Sync API (used by GitHub Actions to push new polls) ──────────────────────
+from flask import request as flask_request, jsonify
+
+@app.server.route("/api/sync-polls", methods=["POST"])
+def sync_polls_api():
+    """Accept a JSON array of already-normalized poll rows and upsert them."""
+    key = flask_request.headers.get("X-Sync-Key", "")
+    if not key or key != os.environ.get("SYNC_KEY", ""):
+        return jsonify({"error": "forbidden"}), 403
+    rows = flask_request.get_json(force=True, silent=True) or []
+    if not rows:
+        return jsonify({"added": 0, "received": 0})
+    df = pd.DataFrame(rows)
+    # Ensure numeric party columns
+    for col in [
+        "likud","yahadut_tora","shas","kahol_lavan","yesh_atid","hadash_taal",
+        "israel_beiteinu","demokratim","zionut_datit","raam","balad",
+        "otzma_yehudit","beyahad","yashar","miluimnikim","reshima_meshutefet",
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = None
+    conn = sqlite3.connect(DB_PATH)
+    init_db(conn)
+    added = upsert(df, conn)
+    conn.close()
+    return jsonify({"added": added, "received": len(rows)})
 
 
 if __name__ == "__main__":

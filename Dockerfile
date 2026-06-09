@@ -15,5 +15,5 @@ ENV PORT=8050
 
 EXPOSE 8050
 
-# Copy seed DB on first run if volume is empty
-CMD ["sh", "-c", "[ ! -f /data/polls.db ] && cp -n /app/seed_polls.db /data/polls.db 2>/dev/null || true; python app.py"]
+# Copy seed DB if volume file is missing OR empty (0 bytes)
+CMD ["sh", "-c", "[ ! -s /data/polls.db ] && cp /app/seed_polls.db /data/polls.db; python app.py"]
