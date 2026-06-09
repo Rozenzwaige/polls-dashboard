@@ -16,7 +16,7 @@ from dash import (
 import dash_bootstrap_components as dbc
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from scraper import DB_PATH, init_db, run_scrape
+from scraper import DB_PATH, init_db, run_scrape, upsert
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "rozamedia2026")
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "Rosa2026!!")
